@@ -1,4 +1,4 @@
-# Guidance for Voice Agents on AWS
+# Guidance for voice agents on AWS
 
 ## Table of Contents
 
