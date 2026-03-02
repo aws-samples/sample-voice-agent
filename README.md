@@ -1,4 +1,4 @@
-# Guidance for Building Real-Time Voice AI Agents on AWS
+# Guidance for Voice Agents on AWS
 
 ## Table of Contents
 
@@ -482,6 +482,7 @@ For any feedback, questions, or suggestions, please use the [issues tab](https:/
 
 ## Authors
 
+- [Court Schuett](https://github.com/cschuett)
 - [Daniel Wirjo](https://github.com/wirjo)
 
 ## Security
