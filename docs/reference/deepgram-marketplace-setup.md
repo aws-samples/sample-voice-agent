@@ -96,24 +96,6 @@ Before deploying, ensure you have sufficient GPU quota:
 
 > **Note:** GPU quota increases can take 24-48 hours. Request them before attempting deployment.
 
-## Troubleshooting
-
-### "Model package not found" Error During CDK Deploy
-
-- Verify you are deploying in the same region as your Marketplace subscription
-- Check that the ARN was copied correctly (no trailing whitespace)
-- Ensure the subscription status is "Active" (not "Pending")
-
-### "ResourceLimitExceeded" Error
-
-- You need more SageMaker GPU quota. See Step 6 above.
-
-### Subscription Shows "Pending" for More Than 10 Minutes
-
-- This is unusual. Try refreshing the page.
-- Check if your AWS account has any restrictions on Marketplace purchases.
-- Contact AWS Support if the issue persists.
-
 ## References
 
 - [AWS Marketplace Subscriptions](https://console.aws.amazon.com/marketplace/home#/subscriptions)

@@ -125,21 +125,23 @@ cp .env.example .env
 # Install dependencies
 npm install
 
-# Deploy with cloud APIs (simpler, no SageMaker needed)
-USE_CLOUD_APIS=true ./deploy.sh deploy
+# Deploy foundation stacks first (Network + Storage)
+USE_CLOUD_APIS=true npx cdk deploy VoiceAgentNetwork VoiceAgentStorage --require-approval never
 
-# Or deploy with SageMaker (production, audio stays in VPC)
-./deploy.sh deploy
-```
-
-After deployment:
-```bash
-# Configure API keys in Secrets Manager
+# Configure API keys in Secrets Manager (before deploying ECS)
 ./scripts/init-secrets.sh
+
+# Deploy remaining stacks (ECS + BotRunner)
+USE_CLOUD_APIS=true npx cdk deploy VoiceAgentSageMaker VoiceAgentEcs VoiceAgentBotRunner --require-approval never
 
 # Set up a phone number
 ./scripts/setup-daily.sh
+./scripts/init-secrets.sh  # sync updated secrets
 ```
+
+After deployment, call your phone number to test. The voice agent responds with Claude and has two built-in tools (`get_current_time`, `hangup_call`).
+
+To add capability agents (Knowledge Base, CRM), see [Post-Deployment Options](infrastructure/DEPLOYMENT.md#post-deployment-options) in the deployment guide.
 
 ## Project Structure
 
@@ -322,26 +324,6 @@ This project deploys the following AWS and third-party resources:
 **Cloud API mode** does not deploy SageMaker endpoints but routes audio through the public internet via Deepgram and Cartesia cloud APIs.
 
 > **You are responsible for all AWS and third-party service charges incurred by deploying and running this project.** Use the **destroy-project** skill (or `cdk destroy --all`) to tear down resources when done.
-
-## Troubleshooting
-
-### No Response from Agent
-
-1. Check Lambda logs for webhook errors
-2. Verify API keys are correctly configured in Secrets Manager
-3. Check ECS service is running and healthy
-
-### High Latency
-
-1. Check SageMaker endpoint CloudWatch metrics
-2. Review CloudWatch metrics for Bedrock latency
-3. Verify VPC endpoints are configured correctly
-
-### No Audio Output
-
-1. Verify Daily room configuration (SIP enabled)
-2. Check Cartesia/Deepgram TTS API key is valid
-3. Review voice agent container logs
 
 ## Security
 

@@ -66,7 +66,7 @@ export AWS_PROFILE=<your-profile>
 | `ENVIRONMENT` | `production` | Deployment environment (poc, dev, staging, prod) - used as CloudWatch dimension |
 | `ENABLE_AUDIO_QUALITY_MONITORING` | `true` | Enable AudioQualityObserver for RMS/peak/silence metrics |
 | `ENABLE_CONVERSATION_LOGGING` | `false` | Enable ConversationObserver for transcript logging |
-| `ENABLE_TOOL_CALLING` | `false` | Enable LLM tool calling (function calling) for executing actions |
+| `ENABLE_TOOL_CALLING` | `true` | Enable LLM tool calling (function calling) for executing actions |
 | `ENABLE_FILLER_PHRASES` | `true` | Enable filler phrases during tool execution delays |
 | `FILLER_DELAY_THRESHOLD_MS` | `1500` | Milliseconds to wait before playing filler phrase |
 

@@ -693,19 +693,6 @@ Why it fails:
 - No guidance on when to use it
 - Unclear parameter name (`q` vs. `query`)
 
-## Troubleshooting
-
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| Agent not discovered | Feature flag disabled | Set `/voice-agent/config/enable-capability-registry` to `true` in SSM |
-| Agent not discovered | Health check failing | Check container logs; ensure `curl` is installed and port 8000 is serving |
-| Agent Card fetch fails | Wrong IP in Agent Card | Verify `_get_task_private_ip()` is implemented and `ECS_CONTAINER_METADATA_URI_V4` is available |
-| Tool not appearing | Skill name conflicts with local tool | Rename your `@tool` function -- local tools shadow A2A tools with the same name |
-| Tool calls timeout | Agent takes >30s to respond | Optimize your tool; check `/voice-agent/a2a/tool-timeout-seconds` SSM param |
-| "Connection refused" | Security group misconfigured | Verify `CapabilityAgentConstruct` has the correct `voiceAgentSecurityGroup` reference |
-| Multiple agents, same skill | Duplicate skill IDs across agents | Use unique function names for `@tool` decorators; duplicates are logged as warnings |
-| First call is slow | Cold start (boto3, Strands LLM init) | Add warm-up in `main()` -- pre-init clients, optionally probe agent (see KB agent `main.py:338-347`) |
-
 ## Reference Implementations
 
 | Agent | Pattern | Tools | Source | Tests |

@@ -102,14 +102,14 @@ EOF
 ### Step 4: Deploy Remaining Stacks
 
 ```bash
-# Deploy SageMaker stub + ECS + BotRunner
+# Deploy remaining stacks (ECS + BotRunner)
 USE_CLOUD_APIS=true npx cdk deploy VoiceAgentSageMaker VoiceAgentEcs VoiceAgentBotRunner --require-approval never
 ```
 
 The ECS container starts with real API keys on first boot. No forced redeployment needed.
 
 This deploys 3 remaining stacks:
-1. **VoiceAgentSageMaker** -- Stub stack (placeholder SSM parameters only in cloud API mode)
+1. **VoiceAgentSageMaker** -- Writes placeholder SSM parameters only (no SageMaker resources in cloud API mode)
 2. **VoiceAgentEcs** -- ECS Fargate cluster, NLB, CloudWatch dashboard
 3. **VoiceAgentBotRunner** -- Lambda webhook handler, API Gateway
 
@@ -289,22 +289,49 @@ aws ssm put-parameter \
 
 After enabling, the voice agent discovers capability agents on its next CloudMap poll cycle (default: 30 seconds). See [Adding a Capability Agent](../docs/guides/adding-a-capability-agent.md) for building custom agents.
 
+#### Seed CRM Demo Data
+
+The CRM DynamoDB tables are created empty. You must seed them with demo data to test CRM lookups:
+
+```bash
+CRM_URL=$(aws ssm get-parameter --name "/voice-agent/crm/api-url" --query 'Parameter.Value' --output text)
+curl -s -X POST "$CRM_URL/admin/seed" | python3 -m json.tool
+```
+
+Expected response: `{"message": "Demo data seeded successfully", "customers_seeded": 3, "cases_seeded": 2}`
+
+This loads 3 demo customers:
+
+| Customer | Phone | Account Type |
+|----------|-------|-------------|
+| John Smith | 555-0100 | premium |
+| Sarah Johnson | 555-0101 | basic |
+| Michael Chen | 555-0102 | enterprise |
+
+Test by calling your phone number and saying: *"Look up the account for 555-0100"*
+
+> **Without seeding, all CRM lookups return "customer not found."**
+
+To reset and re-seed: `curl -s -X DELETE "$CRM_URL/admin/reset"` followed by `curl -s -X POST "$CRM_URL/admin/seed"`
+
 ### Enable Call Transfers
 
 The voice agent can transfer calls to human agents via SIP REFER. See [Call Transfers](../docs/reference/call-transfers.md) for setup instructions.
 
-### Enable Tool Calling
+### Tool Calling
 
-By default, tool calling is disabled. Enable it via SSM:
+Tool calling is **enabled by default**. The voice agent registers built-in tools (`get_current_time`, `hangup_call`) automatically. If you have deployed capability agents and enabled the capability registry, their tools are also registered.
+
+To disable tool calling (conversation-only mode with no tools):
 ```bash
 aws ssm put-parameter \
   --name "/voice-agent/config/enable-tool-calling" \
-  --value "true" \
+  --value "false" \
   --type String \
   --overwrite
 ```
 
-This enables built-in tools (time, hangup) and any capability agent tools.
+This takes effect on the next incoming call — no container restart needed.
 
 ---
 
@@ -366,75 +393,61 @@ CDK automatically rebuilds and pushes the container image when source files chan
 
 ## Cleanup
 
-To destroy all resources:
+### Release Daily.co Phone Numbers
+
+Release your phone numbers **before** destroying infrastructure (the Daily API key is stored in Secrets Manager which CDK will delete):
+
+```bash
+# Load your Daily API key
+source ../backend/voice-agent/.env
+
+# List purchased numbers
+AUTH_HEADER="Authorization: Bearer $DAILY_API_KEY"
+curl -s -H "$AUTH_HEADER" 'https://api.daily.co/v1/purchased-phone-numbers' | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+for n in data.get('data', []):
+    print(f'{n[\"number\"]} (id: {n[\"id\"]})')
+"
+
+# Release a phone number (replace PHONE_ID with the id from above)
+curl -s -X DELETE -H "$AUTH_HEADER" "https://api.daily.co/v1/release-phone-number/PHONE_ID"
+
+# Clear the webhook configuration
+curl -s -H "$AUTH_HEADER" -H 'Content-Type: application/json' \
+  -d '{"properties": {"pinless_dialin": []}}' 'https://api.daily.co/v1/'
+```
+
+> **Note:** A phone number cannot be released within 14 days of purchase. If you get an error, release it manually at [dashboard.daily.co](https://dashboard.daily.co) after the hold period.
+
+### Destroy AWS Resources
 
 ```bash
 cd infrastructure
 ./deploy.sh destroy
 ```
 
-**Warning**: This deletes all resources including VPC, SageMaker endpoints, secrets, and data.
+> **Warning**: This deletes all AWS resources including VPC, SageMaker endpoints, secrets, and data. You are responsible for all charges incurred while resources are running.
 
 ---
 
-## Troubleshooting
-
-### CDK Bootstrap Failed
-
-```bash
-# Get your account ID and region
-AWS_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
-AWS_REGION=$(aws configure get region)
-
-# Manually bootstrap
-npx cdk bootstrap aws://${AWS_ACCOUNT}/${AWS_REGION}
-```
-
-### SageMaker Endpoint Stuck in "Creating"
-
-1. Check CloudWatch logs: `/aws/sagemaker/Endpoints/*`
-2. Verify the model package ARN is correct (from your Marketplace subscription)
-3. Confirm GPU quota is available in your region
-4. SageMaker endpoints typically take 10-15 minutes to provision
-
-### No Response When Calling
-
-1. Check Lambda logs for webhook errors (CloudWatch -> Log Groups -> search "BotRunner")
-2. Verify API keys are populated in Secrets Manager (not "PLACEHOLDER")
-3. Check ECS service is running: `aws ecs describe-services --cluster <cluster-name> --services <service-name>`
-4. Verify Daily webhook is configured: check `setup-daily.sh` output
-
-### High Latency
-
-1. Check SageMaker endpoint CloudWatch metrics (if SageMaker mode)
-2. Review `VoiceAgent/Pipeline` namespace for `E2ELatency` metric
-3. Verify VPC endpoints are configured correctly (network stack)
-4. In cloud API mode, check Deepgram/Cartesia service status pages
-
-### No Audio Output
-
-1. Verify Daily room configuration (SIP must be enabled)
-2. Check TTS API key is valid (Cartesia in cloud mode, or SageMaker endpoint health)
-3. Review voice agent container logs in CloudWatch
-
-### Daily Webhook Not Receiving Calls
-
-1. Verify pinless dial-in is configured: `curl -H "Authorization: Bearer $DAILY_API_KEY" https://api.daily.co/v1`
-2. Check the phone number matches exactly (including country code)
-3. Ensure the webhook URL is HTTPS (API Gateway provides this)
-4. See [Daily.co Setup Guide](../docs/reference/daily-setup.md) for troubleshooting
-
-## Cost Estimate
+## Deployed Resources
 
 | Component | Cloud API Mode | SageMaker Mode |
 |-----------|---------------|----------------|
-| ECS Fargate (1 task, 2 vCPU / 4 GB) | ~$70/month | ~$70/month |
-| SageMaker STT (ml.g6.2xlarge) | N/A | ~$680/month |
-| SageMaker TTS (ml.g6.12xlarge) | N/A | ~$3,400/month |
-| Bedrock Claude Haiku | ~$0.25/1M input tokens | ~$0.25/1M input tokens |
-| Deepgram Cloud STT | ~$0.0043/min | N/A |
-| Cartesia Cloud TTS | ~$0.015/1K chars | N/A |
-| Daily.co | ~$0.025/min + $2/month per number | ~$0.025/min + $2/month per number |
-| VPC NAT Gateway | ~$65/month (2 AZs) | ~$65/month (2 AZs) |
+| VPC + NAT Gateway (2 AZs) | Yes | Yes |
+| ECS Fargate (2 vCPU / 4 GB) | Yes | Yes |
+| Network Load Balancer | Yes | Yes |
+| Secrets Manager + KMS | Yes | Yes |
+| Lambda + API Gateway | Yes | Yes |
+| CloudWatch Dashboard + Alarms | Yes | Yes |
+| SageMaker STT (ml.g6.2xlarge) | No | Yes |
+| SageMaker TTS (ml.g6.12xlarge) | No | Yes |
+| Bedrock Claude Haiku | Yes (pay-per-use) | Yes (pay-per-use) |
+| Daily.co | Yes (third-party) | Yes (third-party) |
+| Deepgram Cloud STT | Yes (third-party) | No (self-hosted) |
+| Cartesia Cloud TTS | Yes (third-party) | No (self-hosted) |
 
-**Cloud API mode** is significantly cheaper for low-to-moderate call volumes but routes audio through the public internet. **SageMaker mode** has higher fixed costs but keeps all audio within your VPC.
+**Cloud API mode** does not deploy SageMaker endpoints but routes audio through the public internet. **SageMaker mode** keeps all audio within your VPC.
+
+> **You are responsible for all AWS and third-party service charges incurred by deploying and running this project.**

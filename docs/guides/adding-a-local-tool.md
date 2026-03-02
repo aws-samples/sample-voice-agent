@@ -260,16 +260,6 @@ aws ssm put-parameter \
 
 The tool will be skipped during registration and logged as `tool_skipped_disabled`.
 
-## Troubleshooting
-
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| Tool not in `tools_registration_complete` log | Capabilities not met | Check `pipeline_capabilities_detected` -- does it include what your tool requires? |
-| Tool registered but LLM never calls it | Poor description | Rewrite the `description` to be more specific about when to use the tool |
-| `tool_skipped_disabled` in logs | SSM override | Check `/voice-agent/config/disabled-tools` SSM parameter |
-| Import error on deploy | Missing from `__init__.py` | Not needed -- catalog imports directly from tool files |
-| `ToolResult` type error in tests | Sync executor | Executor must be `async def`, not `def` |
-
 ## Real-World Examples
 
 ### Simple tool (no special requirements)
