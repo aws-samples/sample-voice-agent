@@ -26,7 +26,7 @@
 
 ## Overview
 
-This Guidance provides a sample foundation for building real-time voice AI agents on AWS. It demonstrates how to build a voice assistant that handles phone calls over SIP/PSTN using [Pipecat](https://github.com/pipecat-ai/pipecat), an open-source framework for voice AI pipelines, running on Amazon ECS Fargate.
+This Guidance provides a sample foundation for building real-time voice AI agents on AWS. It demonstrates how to build a voice assistant that handles phone calls over SIP/PSTN and web applications via WebRTC, using [Pipecat](https://github.com/pipecat-ai/pipecat), an open-source framework for voice AI pipelines, running on Amazon ECS Fargate.
 
 - **Plug-in models** -- Supports automatic speech recognition (ASR) or speech-to-text (STT), text-to-speech (TTS), and large language model (LLM) providers
 - **Phone and web** -- Accepts phone calls via [Daily](https://www.daily.co/) SIP and public switched telephone network (PSTN) dial-in, and web applications through Daily managed WebRTC
