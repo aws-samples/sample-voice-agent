@@ -484,6 +484,8 @@ For any feedback, questions, or suggestions, please use the [issues tab](https:/
 
 - [Court Schuett](https://github.com/cschuett)
 - [Daniel Wirjo](https://github.com/wirjo)
+- [Victor Wang](https://github.com/victorwang)
+- [Evan Grenda](https://github.com/egrenda)
 
 ## Security
 
