@@ -1,0 +1,35 @@
+# Build artifacts
+dist/
+*.js
+!jest.config.js
+!eslint.config.mjs
+*.d.ts
+
+# CDK output
+cdk.out/
+cdk.context.json
+
+# Dependencies
+node_modules/
+
+# Environment
+.env
+
+# IDE
+.idea/
+*.swp
+*.swo
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test coverage
+coverage/
+
+# Outputs
+*-outputs.json
+
+# Keep examples
+!.env.example

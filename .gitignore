@@ -1,0 +1,64 @@
+# Dependencies
+node_modules/
+
+# Build outputs (infrastructure)
+infrastructure/dist/
+infrastructure/*.js
+infrastructure/*.d.ts
+!infrastructure/jest.config.js
+!infrastructure/eslint.config.mjs
+
+# CDK
+infrastructure/cdk.out/
+infrastructure/cdk.context.json
+*-outputs.json
+outputs*.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test coverage
+coverage/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment files (contain API keys - never commit)
+.env
+.env.local
+.env.*.local
+infrastructure/.env
+backend/**/.env
+
+# Python (for Lambda and backend)
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+ENV/
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.json
+
+# Docker
+backend/*/node_modules/
+backend/*/__pycache__/
+
+# Keep examples
+!.env.example
+!infrastructure/.env.example

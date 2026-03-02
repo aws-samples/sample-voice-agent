@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl:*)",
+      "Bash(node:*)",
+      "Bash(npm:*)",
+      "Bash(npx cdk:*)",
+      "Bash(python3:*)",
+      "Bash(python:*)",
+      "Bash(pip:*)",
+      "Bash(pytest:*)",
+      "Bash(aws sts:*)",
+      "Bash(aws ssm:*)",
+      "Bash(aws sso:*)",
+      "Bash(aws bedrock:*)",
+      "Bash(aws sagemaker:*)",
+      "Bash(aws secretsmanager:*)",
+      "Bash(aws service-quotas:*)",
+      "Bash(aws ecs:*)",
+      "Bash(aws cloudformation:*)",
+      "Bash(aws configure:*)",
+      "Bash(docker --version:*)",
+      "Bash(finch --version:*)",
+      "Bash(tail:*)",
+      "Bash(cp:*)",
+      "Bash(rm:*)",
+      "Bash(mkdir:*)",
+      "Bash(set:*)",
+      "Bash(source:*)",
+      "Bash(export:*)"
+    ]
+  }
+}

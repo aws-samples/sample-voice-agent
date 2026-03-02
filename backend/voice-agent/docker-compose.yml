@@ -1,0 +1,101 @@
+# Docker Compose for local voice agent development
+# Usage: docker-compose up --build
+
+version: '3.8'
+
+services:
+  voice-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      # AWS Configuration
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}
+
+      # Provider Selection (default: sagemaker)
+      # Options: "deepgram" for STT, "cartesia" for TTS
+      - STT_PROVIDER=${STT_PROVIDER:-sagemaker}
+      - TTS_PROVIDER=${TTS_PROVIDER:-sagemaker}
+
+      # Cloud API Keys (required when using cloud providers)
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}
+      - CARTESIA_API_KEY=${CARTESIA_API_KEY:-}
+
+      # SageMaker Endpoints (required when using sagemaker provider)
+      - STT_ENDPOINT_NAME=${STT_ENDPOINT_NAME:-}
+      - TTS_ENDPOINT_NAME=${TTS_ENDPOINT_NAME:-}
+
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+
+      # Local development mode
+      - ENVIRONMENT=local
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    volumes:
+      # Mount app for hot reloading during development
+      - ./app:/app/app:ro
+    networks:
+      - voice-agent-network
+
+  # Mock SageMaker endpoints for fully local testing
+  mock-stt:
+    image: python:3.11-slim
+    command: >
+      sh -c "pip install flask && python -c \"
+      from flask import Flask, request, jsonify
+      app = Flask(__name__)
+      @app.route('/invocations', methods=['POST'])
+      def invoke():
+          return jsonify({'results': [{'transcript': 'Hello, this is a test transcription.', 'confidence': 0.95}]})
+      @app.route('/ping', methods=['GET'])
+      def ping():
+          return 'OK'
+      app.run(host='0.0.0.0', port=8081)
+      \""
+    ports:
+      - "8081:8081"
+    networks:
+      - voice-agent-network
+    profiles:
+      - mock
+
+  mock-tts:
+    image: python:3.11-slim
+    command: >
+      sh -c "pip install flask && python -c \"
+      from flask import Flask, request, Response
+      import struct
+      app = Flask(__name__)
+      @app.route('/invocations', methods=['POST'])
+      def invoke():
+          # Return a simple audio-like response (silence)
+          sample_rate = 16000
+          duration = 1  # seconds
+          samples = [0] * (sample_rate * duration)
+          audio_data = struct.pack('<' + 'h' * len(samples), *samples)
+          return Response(audio_data, mimetype='audio/wav')
+      @app.route('/ping', methods=['GET'])
+      def ping():
+          return 'OK'
+      app.run(host='0.0.0.0', port=8082)
+      \""
+    ports:
+      - "8082:8082"
+    networks:
+      - voice-agent-network
+    profiles:
+      - mock
+
+networks:
+  voice-agent-network:
+    driver: bridge

@@ -1,0 +1,7 @@
+# Bot Runner Lambda Dependencies
+# Note: boto3 is included in AWS Lambda runtime but listed here for local development
+
+# AWS SDK (included in Lambda, pinned for local dev)
+boto3>=1.34.0
+
+# No additional dependencies required - uses stdlib urllib for HTTP requests

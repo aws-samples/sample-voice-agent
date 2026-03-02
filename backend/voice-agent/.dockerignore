@@ -1,0 +1,53 @@
+# Python virtual environments
+.venv/
+venv/
+ENV/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+
+# Testing
+.coverage
+coverage.json
+.pytest_cache/
+htmlcov/
+tests/
+
+# Type checking
+.mypy_cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Environment files (contain secrets)
+.env
+.env.local
+.env.*.local
+
+# Keep the example
+!.env.example
+
+# Docker/container files (not needed inside the image)
+docker-compose.yml
+Containerfile
+
+# Docs
+README.md
+
+# Dev dependencies
+requirements-dev.txt
+
+# Git
+.git/
+.gitignore

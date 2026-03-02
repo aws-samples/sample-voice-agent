@@ -1,0 +1,47 @@
+{
+  "name": "voice-agent-infrastructure",
+  "version": "1.0.0",
+  "description": "Voice-to-Voice Agentic POC - CDK Infrastructure",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "cdk": "cdk",
+    "lint": "eslint . --ext .ts",
+    "lint:fix": "eslint . --ext .ts --fix",
+    "format": "prettier --write \"**/*.{ts,json,md}\"",
+    "format:check": "prettier --check \"**/*.{ts,json,md}\"",
+    "synth": "cdk synth",
+    "convert-docs": "python3 ../resources/knowledge-base-documents/convert_to_pdf.py",
+    "predeploy": "npm run convert-docs",
+    "deploy": "cdk deploy --all",
+    "destroy": "cdk destroy --all"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.10.5",
+    "@typescript-eslint/eslint-plugin": "^8.19.1",
+    "@typescript-eslint/parser": "^8.19.1",
+    "aws-cdk": "^2.175.1",
+    "eslint": "^9.17.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-prettier": "^5.2.2",
+    "jest": "^29.7.0",
+    "prettier": "^3.4.2",
+    "ts-jest": "^29.2.5",
+    "ts-node": "^10.9.2",
+    "typescript": "~5.7.3"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.175.1",
+    "constructs": "^10.4.2",
+    "dotenv": "^16.4.7",
+    "source-map-support": "^0.5.21"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
