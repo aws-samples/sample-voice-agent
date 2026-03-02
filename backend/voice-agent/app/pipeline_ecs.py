@@ -1,16 +1,20 @@
 """
-Pipecat Voice Pipeline - Clean ECS Version
+Pipecat Voice Pipeline - ECS Implementation
 
-This is the clean pipeline implementation for ECS Fargate.
-No debugging hacks - just the standard pipecat patterns that work correctly
-when running with asyncio.run().
+This is the pipeline implementation for ECS Fargate supporting two modes:
 
-Architecture:
-- Daily transport handles WebRTC audio I/O
-- Silero VAD detects speech boundaries
-- Deepgram STT converts speech to text
-- Claude on Bedrock generates responses (with tool calling support)
-- Cartesia TTS converts text to speech
+1. Cascaded (default): Separate STT → LLM → TTS services wired together.
+   - Daily transport handles WebRTC audio I/O
+   - Silero VAD detects speech boundaries
+   - Configurable STT (Deepgram cloud or SageMaker)
+   - LLM on Bedrock generates responses (with tool calling support)
+   - Configurable TTS (Cartesia cloud or SageMaker)
+
+2. Speech-to-speech: Single Amazon Nova Sonic model on Bedrock handles
+   audio input and audio output directly, replacing the STT + LLM + TTS chain.
+   - Daily transport handles WebRTC audio I/O
+   - Nova Sonic handles VAD, transcription, reasoning, and synthesis
+   - Tool calling supported via same register_function() interface
 """
 
 import os
@@ -42,7 +46,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMUserAggregatorParams,
 )
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
-from pipecat.services.llm_service import FunctionCallParams
+from pipecat.services.llm_service import FunctionCallParams, LLMService
 from pipecat.observers.base_observer import BaseObserver
 from pipecat.services.aws.llm import AWSBedrockLLMService
 from pipecat.transports.daily.transport import (
@@ -178,6 +182,7 @@ class PipelineConfig:
     voice_id: str
     aws_region: str
     dialin_settings: DialinSettings | None = None
+    pipeline_mode: str = "cascaded"  # "cascaded" or "speech-to-speech"
     stt_provider: str = "deepgram"
     tts_provider: str = "cartesia"
     stt_endpoint: str = ""
@@ -192,12 +197,52 @@ async def create_voice_pipeline(
     """
     Create and configure the voice pipeline for ECS.
 
-    This uses pipecat's standard patterns:
-    1. DailyTransport for WebRTC audio I/O
-    2. Silero VAD for speech detection
-    3. Deepgram STT for transcription
-    4. Bedrock Claude for LLM responses
-    5. Cartesia TTS for speech synthesis
+    Dispatches to the appropriate pipeline builder based on pipeline_mode:
+    - "cascaded" (default): STT → LLM → TTS chain
+    - "speech-to-speech": Single Nova Sonic model
+
+    Args:
+        config: Pipeline configuration
+        collector: Optional MetricsCollector for timing metrics
+        a2a_registry: Optional AgentRegistry for A2A capability discovery
+
+    Returns:
+        Tuple of (PipelineTask, DailyTransport)
+
+    Raises:
+        ValueError: If pipeline_mode is not recognized
+    """
+    mode = config.pipeline_mode.lower()
+
+    if mode == "speech-to-speech":
+        return await _create_s2s_pipeline(config, collector, a2a_registry)
+    elif mode == "cascaded":
+        return await _create_cascaded_pipeline(config, collector, a2a_registry)
+    else:
+        raise ValueError(
+            f"Unknown pipeline_mode '{config.pipeline_mode}'. "
+            "Supported modes: 'cascaded', 'speech-to-speech'"
+        )
+
+
+async def _create_s2s_pipeline(
+    config: PipelineConfig,
+    collector: Optional["MetricsCollector"] = None,
+    a2a_registry: Optional[Any] = None,
+) -> Tuple[PipelineTask, DailyTransport]:
+    """
+    Create a speech-to-speech pipeline using Amazon Nova Sonic.
+
+    Nova Sonic replaces the separate STT + LLM + TTS chain with a single
+    multimodal model that processes audio input and produces audio output
+    directly via Bedrock's bidirectional streaming API.
+
+    The pipeline is simplified to:
+        Transport Input → Nova Sonic → Transport Output
+
+    Tool calling, A2A capabilities, and observability work the same as
+    the cascaded pipeline since Nova Sonic implements Pipecat's LLMService
+    interface (register_function, FunctionCallParams).
 
     Args:
         config: Pipeline configuration
@@ -208,9 +253,309 @@ async def create_voice_pipeline(
         Tuple of (PipelineTask, DailyTransport)
     """
     logger.info(
-        "creating_pipeline",
+        "creating_s2s_pipeline",
         session_id=config.session_id,
         room_url=config.room_url,
+        pipeline_mode="speech-to-speech",
+    )
+
+    # =====================
+    # Daily Transport Setup
+    # =====================
+    daily_dialin = None
+    if config.dialin_settings:
+        daily_dialin = DailyDialinSettings(
+            call_id=config.dialin_settings.call_id,
+            call_domain=config.dialin_settings.call_domain,
+        )
+        logger.info(
+            "dialin_configured",
+            call_id=config.dialin_settings.call_id,
+            call_domain=config.dialin_settings.call_domain,
+        )
+
+    daily_api_key = os.environ.get("DAILY_API_KEY")
+    if not daily_api_key:
+        raise ValueError("DAILY_API_KEY environment variable required")
+
+    transport = DailyTransport(
+        config.room_url,
+        config.room_token,
+        "Voice Assistant",
+        params=DailyParams(
+            api_key=daily_api_key,
+            dialin_settings=daily_dialin,
+            audio_in_enabled=True,
+            audio_out_enabled=True,
+            audio_in_sample_rate=16000,  # Nova Sonic expects 16kHz input
+            audio_out_sample_rate=24000,  # Nova Sonic outputs 24kHz
+            audio_out_end_silence_secs=0,
+        ),
+    )
+    logger.info("daily_transport_created", mode="speech-to-speech")
+
+    # Track SIP session ID for transfers
+    sip_session_tracker: Dict[str, Optional[str]] = {"session_id": None}
+
+    # =====================
+    # Speech-to-Speech Service (Nova Sonic)
+    # =====================
+    from app.services.factory import create_s2s_service
+
+    # Temporarily set system_prompt on config for factory to use
+    s2s_llm = create_s2s_service(config)
+    logger.info("s2s_service_created", provider="nova-sonic")
+
+    # =====================
+    # Tool Calling Setup
+    # =====================
+    enable_tools = _get_enable_tool_calling()
+    enable_registry = _get_enable_capability_registry()
+    tools_list: List[Any] = []
+
+    task_ref: Dict[str, Optional[PipelineTask]] = {"task": None}
+
+    async def _queue_frame_for_tools(frame: Any) -> None:
+        task_instance = task_ref["task"]
+        if task_instance is None:
+            logger.error("queue_frame_called_before_task_created")
+            raise RuntimeError("Pipeline task not yet created -- cannot queue frame")
+        await task_instance.queue_frame(frame)
+
+    if enable_tools:
+        from app.tools.capabilities import detect_capabilities
+
+        available_capabilities = detect_capabilities(
+            transport=transport,
+            sip_session_tracker=sip_session_tracker,
+            config=_get_config(),
+        )
+
+        if enable_registry and a2a_registry:
+            tools_list = _register_capabilities(
+                s2s_llm,
+                config.session_id,
+                transport,
+                collector,
+                sip_session_tracker,
+                a2a_registry,
+                available_capabilities,
+                queue_frame=_queue_frame_for_tools,
+            )
+        else:
+            tools_list = _register_tools(
+                s2s_llm,
+                config.session_id,
+                transport,
+                collector,
+                sip_session_tracker,
+                available_capabilities,
+                queue_frame=_queue_frame_for_tools,
+            )
+
+        logger.info(
+            "tool_calling_enabled",
+            tool_count=len(tools_list),
+            pipeline_mode="speech-to-speech",
+        )
+
+    # =====================
+    # LLM Context Setup
+    # =====================
+    system_content = (
+        f"{config.system_prompt} "
+        "Keep your responses concise and conversational - typically 1-3 sentences. "
+        "When the user joins, greet them warmly and ask how you can help."
+    )
+
+    kb_id = os.environ.get("KB_KNOWLEDGE_BASE_ID")
+    if kb_id:
+        system_content += (
+            " When answering questions about products, policies, or procedures, "
+            "use the search_knowledge_base tool to find accurate information. "
+            "Synthesize the retrieved information naturally into your response. "
+            "When citing sources, mention the document name conversationally, "
+            "for example: 'According to our FAQ...' or 'Our return policy states...'"
+        )
+
+    messages: list = [
+        ChatCompletionSystemMessageParam(
+            role="system",
+            content=system_content,
+        ),
+    ]
+
+    tools_schema: ToolsSchema | None = None
+    if tools_list:
+        tools_schema = ToolsSchema(standard_tools=tools_list)
+
+    context = LLMContext(
+        messages,
+        tools=tools_schema if tools_schema else NOT_GIVEN,
+    )
+    context_aggregator = LLMContextAggregatorPair(context)
+    logger.info("llm_context_created", tools_enabled=bool(tools_list))
+
+    # =====================
+    # Pipeline Assembly (speech-to-speech)
+    # =====================
+    # Simplified: Transport Input → User Context → Nova Sonic → Transport Output → Assistant Context
+    pipeline_components = [
+        transport.input(),
+        context_aggregator.user(),
+        s2s_llm,
+        transport.output(),
+        context_aggregator.assistant(),
+    ]
+
+    pipeline = Pipeline(pipeline_components)
+    logger.info("pipeline_assembled", mode="speech-to-speech")
+
+    # =====================
+    # Observers Setup
+    # =====================
+    observers: List[BaseObserver] = []
+    if collector:
+        from app.observability import (
+            MetricsObserver,
+            ConversationObserver,
+            LLMQualityObserver,
+            ConversationFlowObserver,
+        )
+
+        observers.append(MetricsObserver(collector))
+        logger.info("metrics_observer_added")
+
+        # LLM quality observer for token counts
+        observers.append(LLMQualityObserver(collector, enabled=True))
+        logger.info("llm_quality_observer_added")
+
+        # Conversation flow observer for turn-taking analysis
+        observers.append(ConversationFlowObserver(collector, enabled=True))
+        logger.info("conversation_flow_observer_added")
+
+        # Note: STT quality and audio quality observers are skipped in S2S mode
+        # since Nova Sonic handles transcription and audio processing internally.
+
+        if _get_enable_conversation_logging():
+            observers.append(ConversationObserver(collector, enabled=True))
+            logger.info("conversation_observer_added")
+
+    task = PipelineTask(
+        pipeline,
+        params=PipelineParams(
+            allow_interruptions=True,
+            enable_metrics=True,
+            enable_usage_metrics=True,
+        ),
+        observers=observers,
+    )
+
+    task_ref["task"] = task
+
+    # =====================
+    # Event Handlers
+    # =====================
+    @transport.event_handler("on_joined")
+    async def on_joined(transport, data):
+        logger.info("daily_joined", data=str(data)[:200])
+
+    @transport.event_handler("on_first_participant_joined")
+    async def on_first_participant_joined(transport, participant):
+        logger.info(
+            "participant_joined",
+            session_id=config.session_id,
+            participant_id=participant.get("id"),
+        )
+        # Trigger initial greeting
+        greeting_messages = [
+            {
+                "role": "system",
+                "content": config.system_prompt,
+            },
+            {
+                "role": "user",
+                "content": "[The user has just joined the call. Greet them warmly.]",
+            },
+        ]
+        await task.queue_frames(
+            [LLMMessagesUpdateFrame(greeting_messages, run_llm=True)]
+        )
+
+    @transport.event_handler("on_participant_left")
+    async def on_participant_left(transport, participant, reason):
+        logger.info(
+            "participant_left",
+            session_id=config.session_id,
+            participant_id=participant.get("id"),
+            reason=reason,
+        )
+        await task.queue_frame(EndFrame())
+
+    @transport.event_handler("on_dialin_ready")
+    async def on_dialin_ready(transport, data):
+        logger.info("dialin_ready", data=str(data)[:200])
+
+    @transport.event_handler("on_dialin_connected")
+    async def on_dialin_connected(transport, data):
+        dialin_fields = _parse_dialin_data(data)
+        logger.info("dialin_connected", **dialin_fields)
+        if data and "sessionId" in data:
+            sip_session_tracker["session_id"] = data["sessionId"]
+            logger.info(
+                "sip_session_id_stored", session_id=sip_session_tracker["session_id"]
+            )
+
+    @transport.event_handler("on_dialin_stopped")
+    async def on_dialin_stopped(transport, data):
+        dialin_fields = _parse_dialin_data(data)
+        logger.info("dialin_stopped", **dialin_fields)
+        await task.queue_frame(EndFrame())
+
+    @transport.event_handler("on_dialin_warning")
+    async def on_dialin_warning(transport, data):
+        dialin_fields = _parse_dialin_data(data)
+        logger.warning("dialin_warning", **dialin_fields)
+
+    @transport.event_handler("on_dialin_error")
+    async def on_dialin_error(transport, data):
+        dialin_fields = _parse_dialin_data(data)
+        logger.error("dialin_error", **dialin_fields)
+        await task.queue_frame(EndFrame())
+
+    logger.info("pipeline_created", session_id=config.session_id, mode="speech-to-speech")
+
+    return task, transport
+
+
+async def _create_cascaded_pipeline(
+    config: PipelineConfig,
+    collector: Optional["MetricsCollector"] = None,
+    a2a_registry: Optional[Any] = None,
+) -> Tuple[PipelineTask, DailyTransport]:
+    """
+    Create and configure the cascaded voice pipeline for ECS.
+
+    Uses separate STT, LLM, and TTS services wired together:
+    1. DailyTransport for WebRTC audio I/O
+    2. Silero VAD for speech detection
+    3. Configurable STT for transcription
+    4. Bedrock LLM for responses (with tool calling support)
+    5. Configurable TTS for speech synthesis
+
+    Args:
+        config: Pipeline configuration
+        collector: Optional MetricsCollector for timing metrics
+        a2a_registry: Optional AgentRegistry for A2A capability discovery
+
+    Returns:
+        Tuple of (PipelineTask, DailyTransport)
+    """
+    logger.info(
+        "creating_cascaded_pipeline",
+        session_id=config.session_id,
+        room_url=config.room_url,
+        pipeline_mode="cascaded",
         stt_provider=config.stt_provider,
         tts_provider=config.tts_provider,
         stt_endpoint=config.stt_endpoint or "(cloud)",
@@ -599,7 +944,7 @@ async def create_voice_pipeline(
 
 
 def _register_tools(
-    llm: AWSBedrockLLMService,
+    llm: LLMService,
     session_id: str,
     transport: DailyTransport,
     collector: Optional["MetricsCollector"] = None,
@@ -616,8 +961,11 @@ def _register_tools(
     get registered. This prevents the LLM from seeing tools that can't function
     in the current deployment.
 
+    Works with any Pipecat LLMService subclass (AWSBedrockLLMService,
+    AWSNovaSonicLLMService, etc.) since they all implement register_function().
+
     Args:
-        llm: The Bedrock LLM service to register tools with
+        llm: The LLM service to register tools with
         session_id: Session ID for tool context
         transport: DailyTransport instance for SIP operations (e.g., transfers)
         collector: Optional metrics collector for tool execution metrics
@@ -823,7 +1171,7 @@ def _register_tools(
 
 
 def _register_capabilities(
-    llm: AWSBedrockLLMService,
+    llm: LLMService,
     session_id: str,
     transport: DailyTransport,
     collector: Optional["MetricsCollector"] = None,
@@ -842,8 +1190,10 @@ def _register_capabilities(
     that routes queries to remote agents via the A2A protocol instead of
     executing them locally via ToolExecutor.
 
+    Works with any Pipecat LLMService subclass.
+
     Args:
-        llm: The Bedrock LLM service to register tools with
+        llm: The LLM service to register tools with
         session_id: Session ID for tool context
         transport: DailyTransport instance for SIP operations
         collector: Optional metrics collector

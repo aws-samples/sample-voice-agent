@@ -6,9 +6,10 @@
 # - silero: Voice Activity Detection
 # - deepgram: Cloud STT API + SageMaker STT (DeepgramSageMakerSTTService)
 # - cartesia: Cloud TTS API
-# - aws: Bedrock LLM support
+# - aws: Bedrock LLM support (cascaded pipeline)
+# - aws-nova-sonic: Bedrock Nova Sonic speech-to-speech support
 # - sagemaker: HTTP/2 BiDi streaming for SageMaker endpoints (requires Python >= 3.12)
-pipecat-ai[daily,silero,deepgram,cartesia,aws,sagemaker]==0.0.102
+pipecat-ai[daily,silero,deepgram,cartesia,aws,aws-nova-sonic,sagemaker]==0.0.102
 
 # AWS SDK - let pip resolve version to match aiobotocore requirements
 # aiobotocore 2.25.1 requires botocore>=1.40.46
