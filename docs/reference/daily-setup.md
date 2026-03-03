@@ -271,23 +271,6 @@ After running, sync secrets to AWS:
 
 ---
 
-## Troubleshooting
-
-### Webhook returns 400
-- Ensure your endpoint returns 200 within a few seconds
-- Check that the URL is publicly accessible (not localhost)
-
-### Call drops after connecting
-- Make sure you wait for `dialin-ready` before calling `pinlessCallUpdate`
-- Verify the `sipUri` is correct and not already in use
-
-### No webhook received
-- Verify `pinless_dialin` configuration with `GET /v1`
-- Check that the phone number matches exactly (including +1)
-- Ensure your webhook URL is HTTPS
-
----
-
 ## References
 
 - [Daily REST API Overview](https://docs.daily.co/reference/rest-api)

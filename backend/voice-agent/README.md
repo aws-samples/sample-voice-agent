@@ -370,27 +370,6 @@ When a container has active voice calls, it enables ECS Task Scale-in Protection
 5. **TTS**: SageMaker Deepgram converts response to speech
 6. **Audio Output**: Daily transport sends audio back to caller
 
-## Troubleshooting
-
-### Container Won't Start
-
-1. Check environment variables are set
-2. Verify AWS credentials are valid
-3. Check SageMaker endpoints exist and are in service
-
-### High Latency
-
-1. Ensure SageMaker endpoints are warm (not cold starting)
-2. Check Claude model is using Haiku (fastest)
-3. Verify VAD settings aren't too aggressive
-4. Monitor CloudWatch for endpoint latency
-
-### No Audio Output
-
-1. Verify Daily room URL and token are valid
-2. Check TTS endpoint is responding
-3. Review logs for TTS errors
-
 ## License
 
 Proprietary - AWS Samples
