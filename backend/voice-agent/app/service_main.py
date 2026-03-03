@@ -350,6 +350,9 @@ class PipelineManager:
                 voice_id=self.config.providers.voice_id,
                 aws_region=os.environ.get("AWS_REGION", "us-east-1"),
                 dialin_settings=dialin,
+                pipeline_mode=os.environ.get(
+                    "PIPELINE_MODE", self.config.providers.pipeline_mode
+                ),
                 stt_provider=os.environ.get(
                     "STT_PROVIDER", self.config.providers.stt_provider
                 ),
