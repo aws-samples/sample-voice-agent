@@ -23,6 +23,19 @@ graph LR
     Tools -->|A2A| CRM["CRM Agent"]
 ```
 
+### Local Prototyping Mode
+
+For local development, the same pipeline runs with browser-based WebRTC instead of SIP/PSTN:
+
+```mermaid
+graph LR
+    Browser["Browser\nMic/Speaker"] -->|WebRTC| FastAPI["FastAPI\nlocalhost:7860"]
+    FastAPI --> Transport["SmallWebRTC\nTransport"]
+    Transport --> STT["STT"] --> LLM["LLM"] --> TTS["TTS"] --> Transport
+    LLM -.-> Bedrock["Bedrock"]
+end
+```
+
 ## STT/TTS Providers
 
 The pipeline supports multiple providers for STT and TTS, configurable via environment variables:
@@ -58,6 +71,7 @@ export TTS_ENDPOINT_NAME=your-tts-endpoint
 - **WebSocket streaming** throughout the pipeline
 - **A2A capability agents** for KB search and CRM operations (via CloudMap discovery). See [Adding a Capability Agent](../../docs/guides/adding-a-capability-agent.md) for how to add new agents.
 - **Filler phrases** during tool execution to maintain natural conversation flow
+- **Local prototyping** via browser WebRTC -- test the full pipeline without SIP/PSTN infrastructure
 
 ## Quick Start
 
@@ -127,6 +141,35 @@ docker run -p 8080:8080 \
 # Test health check
 curl http://localhost:8080/ping
 ```
+
+### Run Locally (Browser Prototyping - No SIP Required)
+
+Test the full voice pipeline from your browser without any Daily.co account, phone number, or SIP infrastructure. Uses pipecat's `SmallWebRTCTransport` with a prebuilt WebRTC browser UI.
+
+**Prerequisites:** Cloud resources must be deployed first (Bedrock access, Deepgram/Cartesia API keys). Only the transport layer is local -- STT, LLM, and TTS still use cloud services.
+
+```bash
+# 1. Install dependencies (includes WebRTC + browser UI extras)
+pip install -r requirements.txt
+
+# 2. Configure environment
+cp .env.example .env
+# Edit .env: set DEEPGRAM_API_KEY, CARTESIA_API_KEY, AWS_REGION
+
+# 3. Run the local voice agent
+python -m app.local_main
+
+# 4. Open http://localhost:7860 in your browser and click Connect
+```
+
+The browser UI connects via WebRTC -- speak into your microphone and hear the agent respond through your speakers. Tool calling, filler phrases, and all pipeline features work identically to production. SIP-only tools (e.g., `transfer_to_agent`) are automatically excluded.
+
+| Environment Variable | Default | Description |
+|---------------------|---------|-------------|
+| `LOCAL_PORT` | `7860` | Port for the local server |
+| `SYSTEM_PROMPT` | Generic assistant | Custom system prompt |
+| `ENABLE_TOOL_CALLING` | `false` | Enable LLM tool calling |
+| `ENABLE_FILLER_PHRASES` | `true` | Enable filler phrases during tool delays |
 
 ### Start a Session
 
@@ -286,7 +329,9 @@ backend/voice-agent/
 │   ├── __init__.py
 │   ├── ecs_main.py              # ECS entry point
 │   ├── service_main.py          # aiohttp HTTP service (/health, /ready, /status, /call)
-│   ├── pipeline_ecs.py          # Pipecat pipeline config + tool registration
+│   ├── local_main.py            # Local prototyping (FastAPI + browser WebRTC UI)
+│   ├── pipeline_ecs.py          # Pipecat pipeline config + tool registration (Daily transport)
+│   ├── pipeline_local.py        # Pipecat pipeline config (SmallWebRTC transport)
 │   ├── task_protection.py       # ECS Task Scale-in Protection client
 │   ├── observability.py         # MetricsObserver, AudioQuality, STTQuality, etc.
 │   ├── session_tracker.py       # DynamoDB session tracking

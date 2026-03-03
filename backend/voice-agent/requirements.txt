@@ -8,7 +8,9 @@
 # - cartesia: Cloud TTS API
 # - aws: Bedrock LLM support
 # - sagemaker: HTTP/2 BiDi streaming for SageMaker endpoints (requires Python >= 3.12)
-pipecat-ai[daily,silero,deepgram,cartesia,aws,sagemaker]==0.0.102
+# - webrtc: SmallWebRTCTransport for local browser-based prototyping (aiortc)
+# - runner: FastAPI dev server + prebuilt WebRTC browser UI
+pipecat-ai[daily,silero,deepgram,cartesia,aws,sagemaker,webrtc,runner]==0.0.102
 
 # AWS SDK - let pip resolve version to match aiobotocore requirements
 # aiobotocore 2.25.1 requires botocore>=1.40.46
