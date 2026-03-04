@@ -54,6 +54,9 @@ export const SSM_PARAMS = {
   // (voice-agent:transferDestination or TRANSFER_DESTINATION)
   // No external SSM parameters are needed for transfers.
 
+  // ECS logging outputs
+  TASK_LOG_GROUP_NAME: '/voice-agent/ecs/task-log-group-name',
+
   // A2A Capability Registry outputs
   A2A_NAMESPACE_ID: '/voice-agent/a2a/namespace-id',
   A2A_NAMESPACE_NAME: '/voice-agent/a2a/namespace-name',

@@ -19,6 +19,7 @@ export const TEST_CONFIG: VoiceAgentConfig = {
   maxCapacity: 12,
   targetSessionsPerTask: 3,
   sessionCapacityPerTask: 10,
+  enableCallFlowVisualizer: false,
 };
 
 export const TEST_ENV: cdk.Environment = {

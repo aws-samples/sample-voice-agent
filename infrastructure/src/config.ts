@@ -37,6 +37,8 @@ export interface VoiceAgentConfig {
   sessionCapacityPerTask: number;
   /** Optional SIP URI for call transfers (e.g., sip:user@pbx:5060). When set, the transfer tool is enabled. */
   transferDestination?: string;
+  /** Enable the optional Call Flow Visualizer add-on stack */
+  enableCallFlowVisualizer: boolean;
 }
 
 /**
@@ -167,6 +169,12 @@ export function loadConfig(app: App): VoiceAgentConfig {
     process.env.TRANSFER_DESTINATION ||
     undefined;
 
+  // Optional: Call Flow Visualizer add-on
+  const enableCallFlowVisualizer =
+    (app.node.tryGetContext(`${prefix}:enableCallFlowVisualizer`) ||
+      process.env.ENABLE_CALL_FLOW_VISUALIZER ||
+      'false') === 'true';
+
   return {
     environment,
     region,
@@ -179,5 +187,6 @@ export function loadConfig(app: App): VoiceAgentConfig {
     targetSessionsPerTask,
     sessionCapacityPerTask,
     transferDestination,
+    enableCallFlowVisualizer,
   };
 }

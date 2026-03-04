@@ -653,6 +653,13 @@ export class EcsStack extends cdk.Stack {
       description: 'CloudMap HTTP Namespace Name for A2A capability discovery',
     });
 
+    // Task log group name for downstream consumers (e.g., subscription filters)
+    new ssm.StringParameter(this, 'TaskLogGroupNameParam', {
+      parameterName: SSM_PARAMS.TASK_LOG_GROUP_NAME,
+      stringValue: logGroup.logGroupName,
+      description: 'Voice Agent ECS Task CloudWatch Log Group Name',
+    });
+
     // =====================
     // Outputs
     // =====================

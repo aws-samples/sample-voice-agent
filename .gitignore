@@ -8,6 +8,9 @@ infrastructure/*.d.ts
 !infrastructure/jest.config.js
 !infrastructure/eslint.config.mjs
 
+# Build outputs (frontend)
+frontend/*/dist/
+
 # CDK
 infrastructure/cdk.out/
 infrastructure/cdk.context.json

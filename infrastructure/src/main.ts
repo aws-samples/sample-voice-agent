@@ -13,6 +13,7 @@ import {
   CrmStack,
   KbAgentStack,
   CrmAgentStack,
+  CallFlowVisualizerStack,
 } from './stacks';
 
 const app = new cdk.App();
@@ -201,5 +202,21 @@ const crmAgentStack = new CrmAgentStack(app, 'VoiceAgentCrmAgent', {
 });
 crmAgentStack.addDependency(ecsStack);
 crmAgentStack.addDependency(crmStack);
+
+// Phase 11: Call Flow Visualizer (optional - bolt-on add-on)
+// Enable with: -c voice-agent:enableCallFlowVisualizer=true
+if (config.enableCallFlowVisualizer) {
+  const visualizerStack = new CallFlowVisualizerStack(app, 'VoiceAgentCallFlowVisualizer', {
+    env,
+    config,
+    description: 'Voice Agent - Call Flow Visualizer (optional)',
+    tags: {
+      Project: config.projectName,
+      Environment: config.environment,
+      Phase: '11',
+    },
+  });
+  visualizerStack.addDependency(ecsStack);
+}
 
 app.synth();

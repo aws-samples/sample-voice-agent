@@ -8,3 +8,4 @@ export { BotRunnerStack, BotRunnerStackProps } from './bot-runner-stack';
 export { CrmStack, CrmStackProps } from './crm-stack';
 export { KbAgentStack, KbAgentStackProps } from './kb-agent-stack';
 export { CrmAgentStack, CrmAgentStackProps } from './crm-agent-stack';
+export { CallFlowVisualizerStack, CallFlowVisualizerStackProps } from './call-flow-visualizer-stack';
