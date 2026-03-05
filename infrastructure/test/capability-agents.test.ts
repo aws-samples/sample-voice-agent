@@ -5,6 +5,8 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as servicediscovery from 'aws-cdk-lib/aws-servicediscovery';
 import { KbAgentStack } from '../src/stacks/kb-agent-stack';
 import { CrmAgentStack } from '../src/stacks/crm-agent-stack';
+import { AppointmentStack } from '../src/stacks/appointment-stack';
+import { AppointmentAgentStack } from '../src/stacks/appointment-agent-stack';
 import { NetworkStack } from '../src/stacks/network-stack';
 import { StorageStack } from '../src/stacks/storage-stack';
 import { EcsStack } from '../src/stacks/ecs-stack';
@@ -571,6 +573,211 @@ describe('CrmAgentStack', () => {
   });
 });
 
+describe('AppointmentStack', () => {
+  let template: Template;
+
+  beforeAll(() => {
+    const app = new cdk.App();
+    const stack = new AppointmentStack(app, 'TestAppointmentStack', {
+      env: TEST_ENV,
+      config: TEST_CONFIG,
+    });
+    template = Template.fromStack(stack);
+  });
+
+  it('should create DynamoDB appointments table', () => {
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      KeySchema: Match.arrayWith([
+        Match.objectLike({ AttributeName: 'appointment_id', KeyType: 'HASH' }),
+      ]),
+      BillingMode: 'PAY_PER_REQUEST',
+    });
+  });
+
+  it('should create customer-index GSI', () => {
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      GlobalSecondaryIndexes: Match.arrayWith([
+        Match.objectLike({
+          IndexName: 'customer-index',
+          KeySchema: Match.arrayWith([
+            Match.objectLike({ AttributeName: 'customer_id', KeyType: 'HASH' }),
+          ]),
+        }),
+      ]),
+    });
+  });
+
+  it('should create date-index GSI', () => {
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      GlobalSecondaryIndexes: Match.arrayWith([
+        Match.objectLike({
+          IndexName: 'date-index',
+          KeySchema: Match.arrayWith([
+            Match.objectLike({ AttributeName: 'appointment_date', KeyType: 'HASH' }),
+          ]),
+        }),
+      ]),
+    });
+  });
+
+  it('should create status-index GSI', () => {
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      GlobalSecondaryIndexes: Match.arrayWith([
+        Match.objectLike({
+          IndexName: 'status-index',
+          KeySchema: Match.arrayWith([
+            Match.objectLike({ AttributeName: 'status', KeyType: 'HASH' }),
+          ]),
+        }),
+      ]),
+    });
+  });
+
+  it('should create Lambda function for Appointment API', () => {
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      Runtime: 'python3.11',
+      Handler: 'index.handler',
+      Timeout: 10,
+      MemorySize: 512,
+    });
+  });
+
+  it('should set environment variables on Lambda', () => {
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      Environment: {
+        Variables: Match.objectLike({
+          ENVIRONMENT: 'poc',
+          LOG_LEVEL: 'INFO',
+        }),
+      },
+    });
+  });
+
+  it('should create API Gateway REST API', () => {
+    template.hasResourceProperties('AWS::ApiGateway::RestApi', {
+      Name: Match.stringLikeRegexp('appointment-api'),
+    });
+  });
+
+  it('should create SSM parameters', () => {
+    template.hasResourceProperties('AWS::SSM::Parameter', {
+      Name: '/voice-agent/appointments/api-url',
+    });
+    template.hasResourceProperties('AWS::SSM::Parameter', {
+      Name: '/voice-agent/appointments/table-name',
+    });
+  });
+
+  it('should create CloudWatch dashboard', () => {
+    template.hasResourceProperties('AWS::CloudWatch::Dashboard', {
+      DashboardName: Match.stringLikeRegexp('appointment-dashboard'),
+    });
+  });
+
+  it('should output the API URL', () => {
+    template.hasOutput('AppointmentApiUrl', {});
+  });
+
+  it('should output the table name', () => {
+    template.hasOutput('AppointmentsTableName', {});
+  });
+});
+
+describe('AppointmentAgentStack', () => {
+  let template: Template;
+
+  beforeAll(() => {
+    const app = new cdk.App({ context: AGENT_SSM_CONTEXT });
+    const stack = new AppointmentAgentStack(app, 'TestAppointmentAgentStack', {
+      env: TEST_ENV,
+      config: TEST_CONFIG,
+    });
+    template = Template.fromStack(stack);
+  });
+
+  it('should create a Fargate task definition via CapabilityAgentConstruct', () => {
+    template.hasResourceProperties('AWS::ECS::TaskDefinition', {
+      Cpu: '256',
+      Memory: '512',
+      RequiresCompatibilities: ['FARGATE'],
+    });
+  });
+
+  it('should create an ECS Fargate service', () => {
+    template.hasResourceProperties('AWS::ECS::Service', {
+      LaunchType: 'FARGATE',
+    });
+  });
+
+  it('should set APPOINTMENT_API_URL environment variable on container', () => {
+    template.hasResourceProperties('AWS::ECS::TaskDefinition', {
+      ContainerDefinitions: Match.arrayWith([
+        Match.objectLike({
+          Environment: Match.arrayWith([
+            Match.objectLike({ Name: 'APPOINTMENT_API_URL' }),
+          ]),
+        }),
+      ]),
+    });
+  });
+
+  it('should grant Bedrock model invocation permissions', () => {
+    template.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: {
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: Match.arrayWith([
+              'bedrock:InvokeModel',
+              'bedrock:InvokeModelWithResponseStream',
+            ]),
+            Effect: 'Allow',
+          }),
+        ]),
+      },
+    });
+  });
+
+  it('should NOT grant Bedrock KB retrieval permissions', () => {
+    const policies = template.findResources('AWS::IAM::Policy');
+    for (const [, policy] of Object.entries(policies)) {
+      const statements = (policy.Properties?.PolicyDocument?.Statement || []) as Array<{
+        Action?: string[];
+      }>;
+      for (const stmt of statements) {
+        if (Array.isArray(stmt.Action)) {
+          expect(stmt.Action).not.toContain('bedrock:Retrieve');
+          expect(stmt.Action).not.toContain('bedrock:RetrieveAndGenerate');
+        }
+      }
+    }
+  });
+
+  it('should create CloudMap service for discovery', () => {
+    template.hasResourceProperties('AWS::ServiceDiscovery::Service', {
+      Name: 'appointment',
+    });
+  });
+
+  it('should create security group allowing voice agent inbound', () => {
+    template.hasResourceProperties('AWS::EC2::SecurityGroupIngress', {
+      IpProtocol: 'tcp',
+      FromPort: 8000,
+      ToPort: 8000,
+    });
+  });
+
+  it('should create CloudWatch log group', () => {
+    template.hasResourceProperties('AWS::Logs::LogGroup', {
+      LogGroupName: Match.stringLikeRegexp('appointment-agent'),
+      RetentionInDays: 14,
+    });
+  });
+
+  it('should output the agent service name', () => {
+    template.hasOutput('appointmentAgentServiceName', {});
+  });
+});
+
 describe('Stack Dependencies (Complete Graph)', () => {
   it('should correctly wire all stack dependencies', () => {
     const app = new cdk.App({ context: DEPENDENCY_SSM_CONTEXT });
@@ -605,6 +812,12 @@ describe('Stack Dependencies (Complete Graph)', () => {
     crmAgentStack.addDependency(ecsStack);
     crmAgentStack.addDependency(crmStack);
 
+    const appointmentStack = new AppointmentStack(app, 'DepAppointment', { env: TEST_ENV, config: TEST_CONFIG });
+
+    const appointmentAgentStack = new AppointmentAgentStack(app, 'DepAppointmentAgent', { env: TEST_ENV, config: TEST_CONFIG });
+    appointmentAgentStack.addDependency(ecsStack);
+    appointmentAgentStack.addDependency(appointmentStack);
+
     // Original dependencies
     expect(storageStack.dependencies).toContain(networkStack);
     expect(sagemakerStack.dependencies).toContain(networkStack);
@@ -625,5 +838,9 @@ describe('Stack Dependencies (Complete Graph)', () => {
     // New: CRM agent depends on ECS + CRM
     expect(crmAgentStack.dependencies).toContain(ecsStack);
     expect(crmAgentStack.dependencies).toContain(crmStack);
+
+    // New: Appointment agent depends on ECS + Appointment
+    expect(appointmentAgentStack.dependencies).toContain(ecsStack);
+    expect(appointmentAgentStack.dependencies).toContain(appointmentStack);
   });
 });

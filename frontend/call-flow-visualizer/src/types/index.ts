@@ -60,6 +60,23 @@ export interface SearchResponse {
   count: number;
 }
 
+// ── Sort types ────────────────────────────────────────────────────
+
+export type SortColumn =
+  | 'timestamp'
+  | 'duration_seconds'
+  | 'turn_count'
+  | 'avg_response_ms'
+  | 'avg_rms_db'
+  | 'status';
+
+export type SortDirection = 'asc' | 'desc';
+
+export interface SortState {
+  column: SortColumn;
+  direction: SortDirection;
+}
+
 // ── Badge colors ──────────────────────────────────────────────────
 
 export type EventBadgeColor =
@@ -71,7 +88,8 @@ export type EventBadgeColor =
   | 'purple'
   | 'red'
   | 'darkgray'
-  | 'yellow';
+  | 'yellow'
+  | 'teal';
 
 export function getEventColor(event: CallEvent): EventBadgeColor {
   switch (event.event_type) {
@@ -93,12 +111,19 @@ export function getEventColor(event: CallEvent): EventBadgeColor {
       return 'yellow';
     case 'audio_clipping_detected':
       return 'red';
+    case 'agent_transition':
+      return 'teal';
     default:
       if (event.event_type === 'a2a_tool_call_start') return 'purple';
       if (event.event_type === 'a2a_tool_call_success') return 'purple';
       if (event.event_type === 'a2a_tool_call_cache_hit') return 'purple';
       if (event.event_type === 'a2a_tool_call_timeout') return 'red';
       if (event.event_type === 'a2a_tool_call_error') return 'red';
+      if (event.event_type.startsWith('flow_a2a_call_')) {
+        return event.event_type.includes('error') || event.event_type.includes('timeout')
+          ? 'red'
+          : 'purple';
+      }
       return 'gray';
   }
 }

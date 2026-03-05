@@ -72,31 +72,39 @@ Deployment takes 20-25 minutes (SageMaker endpoints ~15 min).
 
 Deploy in two stages so the ECS container picks up the Daily API key on first boot.
 
+> **Important:** Do **not** set `USE_CLOUD_APIS=true` for SageMaker mode. That flag deploys a lightweight stub instead of real GPU endpoints. In SageMaker mode, the real `SageMakerStack` is used, which requires valid Deepgram Marketplace model package ARNs configured in Phase 3.
+
 1. **Install and bootstrap:**
    ```bash
    cd infrastructure && npm install
    ```
    Check if CDK is bootstrapped; if not, run `npx cdk bootstrap`.
 
-2. **Deploy foundation stacks (Network + Storage):**
+2. **Set container build tool** (must be set in every terminal session):
+   ```bash
+   export CDK_DOCKER=finch  # or 'docker' if using Docker Desktop
+   ```
+
+3. **Deploy foundation stacks (Network + Storage):**
    ```bash
    npx cdk deploy VoiceAgentNetwork VoiceAgentStorage --require-approval never
    ```
 
-3. **Configure secrets now, before deploying ECS:**
+4. **Configure secrets now, before deploying ECS:**
    SageMaker mode only needs `DAILY_API_KEY` (no Deepgram/Cartesia cloud keys).
    Write to `backend/voice-agent/.env`, then push:
    ```bash
    ./scripts/init-secrets.sh
    ```
 
-4. **Deploy remaining stacks (SageMaker + ECS + BotRunner):**
+5. **Deploy remaining stacks (SageMaker + ECS + BotRunner):**
    ```bash
    npx cdk deploy VoiceAgentSageMaker VoiceAgentEcs VoiceAgentBotRunner --require-approval never
    ```
    SageMaker endpoints take 10-15 minutes to provision. This is normal.
    - **ResourceLimitExceeded** = GPU quota insufficient
    - **Model package not found** = wrong ARN or region mismatch
+   - **"ModelPackage does not exist"** = the placeholder ARNs were not replaced with real Marketplace ARNs in Phase 3. Go back and set `DEEPGRAM_STT_MODEL_PACKAGE_ARN` and `DEEPGRAM_TTS_MODEL_PACKAGE_ARN` in your `.env` file.
 
 ### Phase 6: Verify SageMaker Endpoints
 

@@ -448,7 +448,65 @@ Additional optimizations applied:
 - **boto3 client warm-up** on container startup
 - **Agent registry warm-up** on voice agent startup
 
+## Dependency Gating Tags
+
+When [Multi-Agent Flows](../guides/multi-agent-flows.md) mode is enabled, agents can declare cross-agent dependencies using skill-level tags on their Agent Cards. This ensures callers are routed through prerequisite agents before reaching specialists that need prior context.
+
+### Tag Format
+
+| Tag | Meaning | Example |
+|-----|---------|---------|
+| `provides:<key>` | This skill satisfies the named dependency when called successfully | `provides:customer_id` |
+| `requires:<key>` | This skill needs the dependency to be satisfied before it can be used | `requires:customer_id` |
+
+### Adding Tags to an Agent
+
+Pass explicit `skills` to `A2AServer` instead of relying on auto-generated skills:
+
+```python
+from a2a.types import AgentSkill
+
+skills = [
+    AgentSkill(
+        id="lookup_customer",
+        name="Customer Lookup",
+        description="Look up customer information by phone number or account number.",
+        tags=["provides:customer_id"],
+    ),
+    AgentSkill(
+        id="book_appointment",
+        name="Book Appointment",
+        description="Book a service appointment for a customer.",
+        tags=["requires:customer_id"],
+    ),
+]
+
+server = A2AServer(agent=agent, skills=skills, host="0.0.0.0", port=port, http_url=http_url)
+```
+
+### How Gating Works
+
+When a `transfer(target, reason)` is initiated:
+1. The flow system checks the target agent's `requires:` tags
+2. If all requirements are in the satisfied set, the transfer proceeds normally
+3. If any requirement is missing, the system finds a provider agent (one whose skills have the matching `provides:` tag) and redirects the transfer there, with a reason explaining the original intent
+4. When the provider agent's tool succeeds, the dependency is marked as satisfied
+5. The provider agent then transfers to the original target, which now passes the check
+
+### Current Dependency Map
+
+| Agent | Skill | Tag |
+|-------|-------|-----|
+| CRM | `lookup_customer` | `provides:customer_id` |
+| Appointment | `book_appointment` | `requires:customer_id` |
+| Appointment | `cancel_appointment` | `requires:customer_id` |
+| Appointment | `reschedule_appointment` | `requires:customer_id` |
+
+Read-only operations (`check_availability`, `list_appointments`) do not require `customer_id`.
+
 ## Related Documentation
 
 - [Adding a Capability Agent](../guides/adding-a-capability-agent.md) -- Step-by-step walkthrough with complete code templates
+- [Multi-Agent Flows Guide](../guides/multi-agent-flows.md) -- Operator guide for multi-agent context switching
+- [Call Scenarios](../reference/call-scenarios.md) -- Representative test call scripts
 - [AGENTS.md](../../AGENTS.md) -- Environment variables, CloudWatch metrics, SSM configuration

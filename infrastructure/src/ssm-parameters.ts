@@ -50,6 +50,10 @@ export const SSM_PARAMS = {
   CRM_CASES_TABLE_NAME: '/voice-agent/crm/cases-table-name',
   CRM_INTERACTIONS_TABLE_NAME: '/voice-agent/crm/interactions-table-name',
 
+  // Appointment outputs
+  APPOINTMENT_API_URL: '/voice-agent/appointments/api-url',
+  APPOINTMENT_TABLE_NAME: '/voice-agent/appointments/table-name',
+
   // Transfer configuration is set directly via CDK context or env var
   // (voice-agent:transferDestination or TRANSFER_DESTINATION)
   // No external SSM parameters are needed for transfers.

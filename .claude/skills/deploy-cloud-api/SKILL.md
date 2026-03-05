@@ -116,19 +116,27 @@ Before deploying, show what will be created:
 
 Deploy in two stages so the ECS container picks up real API keys on first boot (no forced redeployment needed).
 
+> **Critical: `USE_CLOUD_APIS=true`** — This environment variable **must** be set for every `cdk deploy` command in cloud API mode. It tells CDK to deploy a lightweight stub for the SageMaker stack (SSM parameters only) instead of provisioning real GPU endpoints. Without it, CDK deploys the real `SageMakerStack` which fails because the Deepgram Marketplace model package ARNs are placeholders. The failure rolls back but leaves the stack in `UPDATE_ROLLBACK_COMPLETE` state.
+
 1. **Install and bootstrap:**
    ```bash
    cd infrastructure && npm install
    ```
    Check if CDK is bootstrapped; if not, run `npx cdk bootstrap`.
 
-2. **Deploy foundation stacks (Network + Storage):**
+2. **Set the cloud API mode flag** (must be set in every terminal session):
    ```bash
-   USE_CLOUD_APIS=true npx cdk deploy VoiceAgentNetwork VoiceAgentStorage --require-approval never
+   export USE_CLOUD_APIS=true
+   export CDK_DOCKER=finch  # or 'docker' if using Docker Desktop
+   ```
+
+3. **Deploy foundation stacks (Network + Storage):**
+   ```bash
+   npx cdk deploy VoiceAgentNetwork VoiceAgentStorage --require-approval never
    ```
    This creates the VPC and Secrets Manager. Takes ~3-5 minutes.
 
-3. **Configure secrets now, before deploying ECS:**
+4. **Configure secrets now, before deploying ECS:**
    Write API keys to `backend/voice-agent/.env`, then push to Secrets Manager:
    ```bash
    ./scripts/init-secrets.sh
@@ -139,13 +147,14 @@ Deploy in two stages so the ECS container picks up real API keys on first boot (
    aws secretsmanager get-secret-value --secret-id "$SECRET_ARN" --query 'SecretString' --output text | python3 -c "import json,sys; [print(f'{k}: {len(v)} chars') for k,v in json.loads(sys.stdin.read()).items() if v]"
    ```
 
-4. **Deploy remaining stacks (ECS + BotRunner):**
+5. **Deploy remaining stacks (SageMaker stub + ECS + BotRunner):**
    ```bash
-   USE_CLOUD_APIS=true npx cdk deploy VoiceAgentSageMaker VoiceAgentEcs VoiceAgentBotRunner --require-approval never
+   npx cdk deploy VoiceAgentSageMaker VoiceAgentEcs VoiceAgentBotRunner --require-approval never
    ```
-   The `VoiceAgentSageMaker` stack is included because other stacks depend on it, but in cloud API mode it only writes placeholder SSM parameters — no SageMaker endpoints or GPU resources are created. The ECS container starts with real API keys on first boot. No forced redeployment needed. Takes ~8-10 minutes.
+   With `USE_CLOUD_APIS=true`, the `VoiceAgentSageMaker` stack deploys as a lightweight stub — it writes placeholder SSM parameters (`cloud-api-mode-stt-not-deployed` / `cloud-api-mode-tts-not-deployed`) that the ECS stack reads to set `STT_PROVIDER=deepgram` and `TTS_PROVIDER=cartesia`. No SageMaker endpoints or GPU resources are created. Takes ~8-10 minutes.
 
-5. **Verify each phase succeeds** before proceeding. If any phase fails:
+6. **Verify each phase succeeds** before proceeding. If any phase fails:
+   - **SageMaker stack fails with "ModelPackage does not exist"**: You forgot `USE_CLOUD_APIS=true`. Set it and redeploy: `USE_CLOUD_APIS=true npx cdk deploy VoiceAgentSageMaker --require-approval never`
    - **Docker build timeout**: Container is large; ensure Docker has 4GB+ memory
    - **Access Denied**: IAM role needs administrator access
    - **ExpiredToken**: Re-authenticate and rerun; CDK resumes where it left off

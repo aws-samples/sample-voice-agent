@@ -118,22 +118,22 @@ class TestFillerPhraseConfiguration:
     def test_configuration_defaults(self):
         """Test default configuration values.
 
-        ENABLE_FILLER_PHRASES defaults to False because the LLM's natural
-        pre-tool text already serves as an implicit filler, and adding
-        explicit fillers causes context interleaving issues.
+        ENABLE_FILLER_PHRASES defaults to True so that callers hear
+        contextual filler phrases while tools execute (e.g. "Let me
+        check on that for you").
         """
         from app.pipeline_ecs import _get_enable_filler_phrases
         from unittest.mock import patch, MagicMock
 
         # Mock config to return defaults
         mock_config = MagicMock()
-        mock_config.features.enable_filler_phrases = False
+        mock_config.features.enable_filler_phrases = True
 
         with patch("app.pipeline_ecs._get_config", return_value=mock_config):
             result = _get_enable_filler_phrases()
 
-        # Disabled by default - LLM's natural text serves as filler
-        assert result is False
+        # Enabled by default
+        assert result is True
 
     def test_configuration_override_enable(self):
         """Test that filler phrases can be enabled via config."""

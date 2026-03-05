@@ -24,6 +24,8 @@ import structlog
 from cachetools import TTLCache
 from pipecat.services.llm_service import FunctionCallParams
 
+from app.tools.result_summarizer import is_result_logging_enabled, summarize_tool_result
+
 logger = structlog.get_logger(__name__)
 
 # A2A adapter-level response cache configuration
@@ -45,6 +47,7 @@ def create_a2a_tool_handler(
     timeout_seconds: float = 30.0,
     collector: Optional[Any] = None,  # MetricsCollector
     cache: Optional[TTLCache] = None,  # Optional shared cache
+    category: str = "a2a",  # Metrics category (prefer resolve_tool_category)
 ) -> Callable:
     """Create a Pipecat-compatible tool handler for an A2A skill.
 
@@ -59,6 +62,10 @@ def create_a2a_tool_handler(
         cache: Optional TTLCache for response caching. If None, a per-handler
             cache is created using A2A_CACHE_TTL_SECONDS and A2A_CACHE_MAX_SIZE
             env vars.
+        category: Metrics category string for this tool. Use
+            ``resolve_tool_category(agent_name).value`` to derive a
+            meaningful category from the agent's name. Defaults to
+            ``"a2a"`` for backward compatibility.
 
     Returns:
         Async handler function for use with llm.register_function()
@@ -102,7 +109,7 @@ def create_a2a_tool_handler(
                 try:
                     collector.record_tool_execution(
                         tool_name=skill_id,
-                        category="a2a",
+                        category=category,
                         status="cache_hit",
                         execution_time_ms=cache_ms,
                     )
@@ -133,14 +140,35 @@ def create_a2a_tool_handler(
 
             elapsed_ms = (time.monotonic() - start_time) * 1000
 
-            logger.info(
-                "a2a_tool_call_success",
-                skill_id=skill_id,
-                elapsed_ms=round(elapsed_ms),
-                invoke_ms=round(invoke_ms),
-                extract_ms=round(extract_ms, 1),
-                response_length=len(response_text),
-            )
+            # Build log kwargs with optional result summary
+            log_kwargs = {
+                "skill_id": skill_id,
+                "elapsed_ms": round(elapsed_ms),
+                "invoke_ms": round(invoke_ms),
+                "extract_ms": round(extract_ms, 1),
+                "response_length": len(response_text),
+            }
+
+            result_summary = None
+            if is_result_logging_enabled():
+                try:
+                    result_summary = summarize_tool_result(
+                        response_text, tool_name=skill_id
+                    )
+                except Exception:
+                    pass
+
+            if result_summary is not None:
+                log_kwargs["result_summary"] = result_summary
+
+            logger.info("a2a_tool_call_success", **log_kwargs)
+
+            if result_summary is not None:
+                logger.debug(
+                    "a2a_tool_result_detail",
+                    skill_id=skill_id,
+                    result_content=response_text,
+                )
 
             # Cache the successful response
             response_cache[cache_key] = response_text
@@ -150,7 +178,7 @@ def create_a2a_tool_handler(
                 try:
                     collector.record_tool_execution(
                         tool_name=skill_id,
-                        category="a2a",
+                        category=category,
                         status="success",
                         execution_time_ms=elapsed_ms,
                     )
@@ -179,7 +207,7 @@ def create_a2a_tool_handler(
                 try:
                     collector.record_tool_execution(
                         tool_name=skill_id,
-                        category="a2a",
+                        category=category,
                         status="timeout",
                         execution_time_ms=elapsed_ms,
                     )

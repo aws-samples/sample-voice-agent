@@ -317,9 +317,20 @@ class PipelineManager:
         structlog.contextvars.bind_contextvars(call_id=call_id, session_id=session_id)
 
         # Create metrics collector for this call
+        # Pass audio threshold so MetricsCollector.end_turn() can perform
+        # dual-signal poor audio detection (RMS + STT confidence).
+        poor_audio_threshold = -70.0
+        cfg_svc = get_config_service()
+        if cfg_svc.is_configured():
+            poor_audio_threshold = cfg_svc.config.audio.poor_audio_threshold_db
+        else:
+            poor_audio_threshold = float(
+                os.environ.get("POOR_AUDIO_THRESHOLD_DB", "-70.0")
+            )
         collector = create_metrics_collector(
             call_id=call_id,
             session_id=session_id,
+            poor_audio_threshold_db=poor_audio_threshold,
         )
 
         transport = None
@@ -572,8 +583,8 @@ async def _config_refresh_loop(region: str) -> None:
             await config_service.refresh()
             cfg = config_service.config
 
-            want_registry = (
-                cfg.features.enable_capability_registry and bool(cfg.a2a.namespace)
+            want_registry = cfg.features.enable_capability_registry and bool(
+                cfg.a2a.namespace
             )
             have_registry = _a2a_registry is not None
 
@@ -586,9 +597,7 @@ async def _config_refresh_loop(region: str) -> None:
                     a2a_timeout=cfg.a2a.tool_timeout_seconds,
                 )
                 _a2a_poll_interval = cfg.a2a.poll_interval_seconds
-                await _a2a_registry.start_polling(
-                    interval_seconds=_a2a_poll_interval
-                )
+                await _a2a_registry.start_polling(interval_seconds=_a2a_poll_interval)
                 logger.info(
                     "a2a_registry_lazy_initialized",
                     namespace=cfg.a2a.namespace,

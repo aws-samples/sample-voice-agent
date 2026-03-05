@@ -132,6 +132,18 @@ def _get_enable_audio_quality() -> bool:
     return cfg.features.enable_audio_quality_monitoring
 
 
+def _get_poor_audio_threshold_db() -> float:
+    """Get poor audio threshold from config.
+
+    Returns the configured threshold in dBFS. Defaults to -70.0 which is
+    calibrated for PSTN/SIP dial-in (normal speech is -62 to -75 dBFS).
+    """
+    cfg = _get_config()
+    if cfg is None:
+        return float(os.environ.get("POOR_AUDIO_THRESHOLD_DB", "-70.0"))
+    return cfg.audio.poor_audio_threshold_db
+
+
 def _get_enable_conversation_logging() -> bool:
     """Get conversation logging enabled status from config."""
     cfg = _get_config()
@@ -146,6 +158,14 @@ def _get_enable_capability_registry() -> bool:
     if cfg is None:
         return False
     return cfg.features.enable_capability_registry
+
+
+def _get_enable_flow_agents() -> bool:
+    """Get flow agents (multi-agent handoff) enabled status from config."""
+    cfg = _get_config()
+    if cfg is None:
+        return False
+    return cfg.features.enable_flow_agents
 
 
 def _get_llm_model_id() -> str:
@@ -293,6 +313,7 @@ async def create_voice_pipeline(
     # =====================
     enable_tools = _get_enable_tool_calling()
     enable_registry = _get_enable_capability_registry()
+    enable_flows = _get_enable_flow_agents()
     tools_list: List[Any] = []
 
     # Deferred reference to PipelineTask for tool-initiated frame queuing.
@@ -315,7 +336,32 @@ async def create_voice_pipeline(
             raise RuntimeError("Pipeline task not yet created -- cannot queue frame")
         await task_instance.queue_frame(frame)
 
-    if enable_tools:
+    # FlowManager reference for Flows mode (populated below if enabled)
+    flow_manager_ref: Dict[str, Any] = {"flow_manager": None, "initial_node": None}
+    # Capabilities detected at pipeline creation time (used by both paths)
+    available_capabilities: Optional[Any] = None
+
+    if enable_flows and enable_tools:
+        # =====================
+        # Flows Mode: Multi-Agent Handoff
+        # =====================
+        # When flow agents are enabled, FlowManager handles tool registration
+        # and context management. Skip the static tool registration path.
+        from app.tools.capabilities import detect_capabilities
+
+        available_capabilities = detect_capabilities(
+            transport=transport,
+            sip_session_tracker=sip_session_tracker,
+            config=_get_config(),
+        )
+
+        logger.info(
+            "flow_agents_enabled",
+            capabilities=sorted(c.value for c in available_capabilities),
+            a2a_registry_available=bool(a2a_registry),
+        )
+
+    elif enable_tools:
         # Detect what pipeline capabilities are available in this deployment.
         # This drives which local tools get registered -- tools whose
         # requirements aren't met are silently skipped.
@@ -476,15 +522,26 @@ async def create_voice_pipeline(
             STTQualityObserver,
             LLMQualityObserver,
             ConversationFlowObserver,
+            QualityScoreCalculator,
         )
 
         # Metrics observer for timing/latency metrics
         observers.append(MetricsObserver(collector))
         logger.info("metrics_observer_added")
 
+        # Configure audio quality threshold from SSM/env
+        poor_audio_threshold = _get_poor_audio_threshold_db()
+        QualityScoreCalculator.configure(poor_audio_threshold)
+
         # Audio quality observer for RMS/peak/silence metrics
         if _get_enable_audio_quality():
-            observers.append(AudioQualityObserver(collector, enabled=True))
+            observers.append(
+                AudioQualityObserver(
+                    collector,
+                    enabled=True,
+                    poor_audio_threshold_db=poor_audio_threshold,
+                )
+            )
             logger.info("audio_quality_observer_added")
 
         # STT quality observer for confidence scores
@@ -520,6 +577,34 @@ async def create_voice_pipeline(
     task_ref["task"] = task
 
     # =====================
+    # FlowManager Setup (Flows Mode)
+    # =====================
+    if enable_flows and enable_tools:
+        from app.flows import create_flow_manager, create_initial_node
+
+        flow_manager = create_flow_manager(
+            task=task,
+            llm=llm,
+            context_aggregator=context_aggregator,
+            transport=transport,
+            session_id=config.session_id,
+            sip_session_tracker=sip_session_tracker,
+            collector=collector,
+            queue_frame=_queue_frame_for_tools,
+            a2a_registry=a2a_registry,
+            available_capabilities=available_capabilities,
+        )
+        initial_node = create_initial_node(a2a_registry)
+        flow_manager_ref["flow_manager"] = flow_manager
+        flow_manager_ref["initial_node"] = initial_node
+
+        logger.info(
+            "flow_manager_ready",
+            session_id=config.session_id,
+            initial_node="orchestrator",
+        )
+
+    # =====================
     # Event Handlers
     # =====================
 
@@ -534,7 +619,23 @@ async def create_voice_pipeline(
             session_id=config.session_id,
             participant_id=participant.get("id"),
         )
-        # Trigger initial greeting by sending context with a user message
+
+        # Check if Flows mode is active
+        fm = flow_manager_ref.get("flow_manager")
+        initial = flow_manager_ref.get("initial_node")
+        if fm and initial:
+            # Flows mode: initialize FlowManager with the orchestrator node.
+            # FlowManager handles the greeting via pre_actions TTS and sets
+            # up the initial context (system prompt + tools).
+            logger.info(
+                "flow_manager_initializing",
+                session_id=config.session_id,
+                initial_node="orchestrator",
+            )
+            await fm.initialize(initial)
+            return
+
+        # Standard mode: trigger initial greeting by sending context
         # Bedrock's Converse API requires conversations to start with a user message
         greeting_messages = [
             {
@@ -882,7 +983,7 @@ def _register_capabilities(
     local_tool_names = {schema.name for schema in local_tools}
 
     # Register A2A tool handlers and collect non-conflicting specs
-    from app.a2a import create_a2a_tool_handler
+    from app.a2a import create_a2a_tool_handler, resolve_tool_category
     from pipecat.adapters.schemas.function_schema import FunctionSchema
 
     a2a_tools_added = []
@@ -907,6 +1008,7 @@ def _register_capabilities(
             agent=entry.agent,
             timeout_seconds=float(a2a_registry.a2a_timeout),
             collector=collector,
+            category=resolve_tool_category(skill_info.agent_name).value,
         )
 
         llm.register_function(

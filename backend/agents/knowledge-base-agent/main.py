@@ -112,10 +112,11 @@ def _get_bedrock_client():
 
 @tool
 def search_knowledge_base(query: str, max_results: int = 3) -> dict:
-    """Search the knowledge base for information about products, policies,
-    procedures, or other documentation. Use this when the user asks questions
-    that might be answered by company documentation, FAQs, or reference
-    materials. Always cite the source when presenting information.
+    """Search the knowledge base for technical documentation, troubleshooting
+    guides, service descriptions, warranties, pricing, and company policies.
+    Use this when the user asks questions that might be answered by company
+    documentation or needs help troubleshooting a technical issue.
+    Always cite the source when presenting information.
 
     Args:
         query: Natural language search query. Be specific for better results.
@@ -360,9 +361,10 @@ def main():
     agent = Agent(
         name="Knowledge Base Agent",
         description=(
-            "Searches enterprise knowledge base for product, policy, "
-            "and procedure information. Use this agent when users ask "
-            "about company documentation, FAQs, or reference materials."
+            "Searches the company knowledge base for technical documentation, "
+            "troubleshooting guides, service descriptions, and company policies. "
+            "Use this agent when users ask about services, need troubleshooting "
+            "help, or have questions about warranties, pricing, or procedures."
         ),
         model=model,
         tools=[search_knowledge_base],

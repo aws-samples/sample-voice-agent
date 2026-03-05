@@ -46,6 +46,11 @@ SUPPORTED_EVENTS = frozenset(
         "call_metrics_summary",
         "audio_clipping_detected",
         "poor_audio_detected",
+        "agent_transition",
+        "flow_a2a_call_start",
+        "flow_a2a_call_success",
+        "flow_a2a_call_error",
+        "flow_a2a_call_timeout",
     ]
 )
 
@@ -140,7 +145,9 @@ def _parse_log_event(log_event: dict[str, Any]) -> dict[str, Any] | None:
         date_str = timestamp[:10] if isinstance(timestamp, str) else ""
         item["GSI2PK"] = f"TOOL#{tool_name}"
         item["GSI2SK"] = f"DATE#{date_str}#{call_id}"
-    elif event_type.startswith("a2a_tool_call_"):
+    elif event_type.startswith("a2a_tool_call_") or event_type.startswith(
+        "flow_a2a_call_"
+    ):
         skill_id = message.get("skill_id", "unknown")
         date_str = timestamp[:10] if isinstance(timestamp, str) else ""
         item["GSI2PK"] = f"TOOL#{skill_id}"

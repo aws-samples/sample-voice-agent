@@ -41,11 +41,13 @@ class FeatureFlags:
     """Feature toggle configuration."""
 
     enable_tool_calling: bool = True
-    enable_filler_phrases: bool = False
+    enable_filler_phrases: bool = True
     enable_conversation_logging: bool = True
     enable_audio_quality_monitoring: bool = True
     enable_capability_registry: bool = False
+    enable_flow_agents: bool = False
     disabled_tools: str = ""  # Comma-separated list of tool names to disable
+    enable_tool_result_logging: bool = False
 
 
 @dataclass
@@ -65,6 +67,13 @@ class LLMConfig:
 
 
 @dataclass
+class AudioConfig:
+    """Audio quality monitoring configuration."""
+
+    poor_audio_threshold_db: float = -70.0
+
+
+@dataclass
 class AppConfig:
     """Complete application configuration."""
 
@@ -72,6 +81,7 @@ class AppConfig:
     log_level: str = "INFO"
     session_table_name: str = ""
     api_key_secret_arn: str = ""
+    flow_max_transitions: int = 10
     knowledge_base: KnowledgeBaseConfig = field(
         default_factory=lambda: KnowledgeBaseConfig("", "", "")
     )
@@ -79,6 +89,7 @@ class AppConfig:
     features: FeatureFlags = field(default_factory=FeatureFlags)
     llm: LLMConfig = field(default_factory=LLMConfig)
     a2a: A2AConfig = field(default_factory=A2AConfig)
+    audio: AudioConfig = field(default_factory=AudioConfig)
 
 
 class ConfigService:
@@ -202,9 +213,7 @@ class ConfigService:
             batch_size = 10
             for i in range(0, len(param_names), batch_size):
                 batch = param_names[i : i + batch_size]
-                response = self._ssm.get_parameters(
-                    Names=batch, WithDecryption=False
-                )
+                response = self._ssm.get_parameters(Names=batch, WithDecryption=False)
                 params.update(
                     {p["Name"]: p["Value"] for p in response.get("Parameters", [])}
                 )
@@ -263,14 +272,20 @@ class ConfigService:
             f"{self.CONFIG_PATH}/enable-filler-phrases",
             f"{self.CONFIG_PATH}/enable-conversation-logging",
             f"{self.CONFIG_PATH}/enable-audio-quality-monitoring",
+            # Flow Agents (multi-agent handoff)
+            f"{self.CONFIG_PATH}/enable-flow-agents",
+            f"{self.CONFIG_PATH}/flow-max-transitions",
             # Capability Registry (A2A)
             f"{self.CONFIG_PATH}/enable-capability-registry",
             f"{self.CONFIG_PATH}/disabled-tools",
+            f"{self.CONFIG_PATH}/enable-tool-result-logging",
             f"{self.A2A_PATH}/namespace",
             f"{self.A2A_PATH}/poll-interval-seconds",
             f"{self.A2A_PATH}/tool-timeout-seconds",
             # LLM
             f"{self.CONFIG_PATH}/llm-model-id",
+            # Audio quality
+            f"{self.CONFIG_PATH}/poor-audio-threshold-db",
             # Infrastructure
             f"{self.SESSIONS_PATH}/table-name",
             f"{self.STORAGE_PATH}/api-key-secret-arn",
@@ -306,7 +321,7 @@ class ConfigService:
             ).lower()
             == "true",
             enable_filler_phrases=params.get(
-                f"{self.CONFIG_PATH}/enable-filler-phrases", "false"
+                f"{self.CONFIG_PATH}/enable-filler-phrases", "true"
             ).lower()
             == "true",
             enable_conversation_logging=params.get(
@@ -321,7 +336,15 @@ class ConfigService:
                 f"{self.CONFIG_PATH}/enable-capability-registry", "false"
             ).lower()
             == "true",
+            enable_flow_agents=params.get(
+                f"{self.CONFIG_PATH}/enable-flow-agents", "false"
+            ).lower()
+            == "true",
             disabled_tools=params.get(f"{self.CONFIG_PATH}/disabled-tools", ""),
+            enable_tool_result_logging=params.get(
+                f"{self.CONFIG_PATH}/enable-tool-result-logging", "false"
+            ).lower()
+            == "true",
         )
 
         # A2A capability registry config
@@ -344,6 +367,23 @@ class ConfigService:
             model_id=params.get(f"{self.CONFIG_PATH}/llm-model-id", default_model),
         )
 
+        # Audio quality config - SSM parameter with env var fallback
+        default_threshold = os.environ.get("POOR_AUDIO_THRESHOLD_DB", "-70.0")
+        try:
+            threshold_value = float(
+                params.get(
+                    f"{self.CONFIG_PATH}/poor-audio-threshold-db", default_threshold
+                )
+            )
+        except (ValueError, TypeError):
+            logger.warning(
+                "invalid_poor_audio_threshold",
+                note="falling_back_to_default",
+                default=-70.0,
+            )
+            threshold_value = -70.0
+        audio_config = AudioConfig(poor_audio_threshold_db=threshold_value)
+
         # Build complete config
         config = AppConfig(
             environment=os.environ.get("ENVIRONMENT", "production"),
@@ -352,11 +392,15 @@ class ConfigService:
             api_key_secret_arn=params.get(
                 f"{self.STORAGE_PATH}/api-key-secret-arn", ""
             ),
+            flow_max_transitions=int(
+                params.get(f"{self.CONFIG_PATH}/flow-max-transitions", "10")
+            ),
             knowledge_base=kb_config,
             providers=provider_config,
             features=features,
             llm=llm_config,
             a2a=a2a_config,
+            audio=audio_config,
         )
 
         return config
@@ -396,6 +440,11 @@ class ConfigService:
     def a2a(self) -> A2AConfig:
         """Get A2A capability registry configuration."""
         return self.config.a2a
+
+    @property
+    def audio(self) -> AudioConfig:
+        """Get audio quality configuration."""
+        return self.config.audio
 
     def is_configured(self) -> bool:
         """Check if configuration has been loaded."""

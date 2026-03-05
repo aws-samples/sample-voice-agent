@@ -428,6 +428,64 @@ export class VoiceAgentMonitoringConstruct extends Construct {
     );
     alarms.push(metricStalenessAlarm);
 
+    // Alarm 9: Agent Transition Latency High
+    // Fires when average agent-to-agent transition latency exceeds 500ms.
+    // Only relevant when multi-agent flows feature is enabled.
+    const transitionLatencyAlarm = new cloudwatch.Alarm(
+      this,
+      'TransitionLatencyAlarm',
+      {
+        alarmName: `${props.projectName}-${props.environment}-transition-latency-high`,
+        alarmDescription:
+          'Agent transition latency is too high. Context swap between agents is slow.',
+        metric: new cloudwatch.Metric({
+          namespace: 'VoiceAgent/Pipeline',
+          metricName: 'AgentTransitionLatency',
+          dimensionsMap: {
+            Environment: props.environment,
+          },
+          statistic: 'Average',
+          period: cdk.Duration.minutes(1),
+        }),
+        threshold: 500,
+        evaluationPeriods: 3,
+        datapointsToAlarm: 3,
+        comparisonOperator:
+          cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      }
+    );
+    alarms.push(transitionLatencyAlarm);
+
+    // Alarm 10: Transition Loop Protection Activated
+    // Fires when the loop protection mechanism activates, indicating the
+    // LLM is stuck in a routing loop between agents.
+    const loopProtectionAlarm = new cloudwatch.Alarm(
+      this,
+      'LoopProtectionAlarm',
+      {
+        alarmName: `${props.projectName}-${props.environment}-transition-loop-detected`,
+        alarmDescription:
+          'Agent transition loop protection activated. LLM may be stuck routing between agents.',
+        metric: new cloudwatch.Metric({
+          namespace: 'VoiceAgent/Pipeline',
+          metricName: 'TransitionLoopProtection',
+          dimensionsMap: {
+            Environment: props.environment,
+          },
+          statistic: 'Sum',
+          period: cdk.Duration.minutes(5),
+        }),
+        threshold: 1,
+        evaluationPeriods: 1,
+        datapointsToAlarm: 1,
+        comparisonOperator:
+          cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      }
+    );
+    alarms.push(loopProtectionAlarm);
+
     // Add alarm actions if notifications enabled
     if (alarmAction) {
       alarms.forEach((alarm) => {
@@ -444,7 +502,7 @@ export class VoiceAgentMonitoringConstruct extends Construct {
    */
   private createDashboard(
     props: VoiceAgentMonitoringProps,
-    _resourcePrefix: string,
+    resourcePrefix: string,
     thresholds: AlarmThresholds
   ): cloudwatch.Dashboard {
     const dashboard = new cloudwatch.Dashboard(this, 'OperationalDashboard', {
@@ -870,15 +928,37 @@ export class VoiceAgentMonitoringConstruct extends Construct {
             label: 'Max Peak',
             color: '#9467bd',
           }),
+          new cloudwatch.Metric({
+            namespace: 'VoiceAgent/Pipeline',
+            metricName: 'AudioRMSMin',
+            dimensionsMap: {
+              Environment: props.environment,
+            },
+            statistic: 'Average',
+            period: cdk.Duration.minutes(1),
+            label: 'RMS Min (quietest frame)',
+            color: '#d62728',
+          }),
+          new cloudwatch.Metric({
+            namespace: 'VoiceAgent/Pipeline',
+            metricName: 'AudioRMSMax',
+            dimensionsMap: {
+              Environment: props.environment,
+            },
+            statistic: 'Average',
+            period: cdk.Duration.minutes(1),
+            label: 'RMS Max (loudest frame)',
+            color: '#2ca02c',
+          }),
         ],
         leftYAxis: {
-          min: -60,
+          min: -80,
           max: 0,
           label: 'dBFS',
         },
         leftAnnotations: [
           {
-            value: -55,
+            value: -70,
             color: '#ff0000',
             label: 'Poor Quality Threshold',
           },
@@ -1438,6 +1518,199 @@ export class VoiceAgentMonitoringConstruct extends Construct {
       })
     );
 
+    // =================================================================
+    // Row 11: Multi-Agent Flows
+    // Metrics from the Pipecat Flows multi-agent handoff system.
+    // Only populated when the flow-agents feature flag is enabled.
+    // =================================================================
+    dashboard.addWidgets(
+      // Agent Transitions per Call
+      new cloudwatch.GraphWidget({
+        title: 'Agent Transitions per Call',
+        left: [
+          new cloudwatch.Metric({
+            namespace: 'VoiceAgent/Pipeline',
+            metricName: 'AgentTransitionCount',
+            dimensionsMap: {
+              Environment: props.environment,
+            },
+            statistic: 'Sum',
+            period: cdk.Duration.minutes(1),
+            label: 'Transitions',
+            color: '#2ca02c',
+          }),
+        ],
+        right: [
+          new cloudwatch.Metric({
+            namespace: 'VoiceAgent/Pipeline',
+            metricName: 'TransitionLoopProtection',
+            dimensionsMap: {
+              Environment: props.environment,
+            },
+            statistic: 'Sum',
+            period: cdk.Duration.minutes(1),
+            label: 'Loop Protection',
+            color: '#d62728',
+          }),
+        ],
+        leftYAxis: {
+          min: 0,
+          label: 'Count',
+        },
+        rightYAxis: {
+          min: 0,
+          label: 'Loop Protection',
+        },
+        width: 8,
+        height: 6,
+      }),
+      // Agent Transition Latency
+      new cloudwatch.GraphWidget({
+        title: 'Agent Transition Latency',
+        left: [
+          new cloudwatch.Metric({
+            namespace: 'VoiceAgent/Pipeline',
+            metricName: 'AgentTransitionLatency',
+            dimensionsMap: {
+              Environment: props.environment,
+            },
+            statistic: 'p50',
+            period: cdk.Duration.minutes(1),
+            label: 'P50',
+            color: '#1f77b4',
+          }),
+          new cloudwatch.Metric({
+            namespace: 'VoiceAgent/Pipeline',
+            metricName: 'AgentTransitionLatency',
+            dimensionsMap: {
+              Environment: props.environment,
+            },
+            statistic: 'p95',
+            period: cdk.Duration.minutes(1),
+            label: 'P95',
+            color: '#ff7f0e',
+          }),
+          new cloudwatch.Metric({
+            namespace: 'VoiceAgent/Pipeline',
+            metricName: 'AgentTransitionLatency',
+            dimensionsMap: {
+              Environment: props.environment,
+            },
+            statistic: 'p99',
+            period: cdk.Duration.minutes(1),
+            label: 'P99',
+            color: '#d62728',
+          }),
+        ],
+        leftYAxis: {
+          min: 0,
+          label: 'Milliseconds',
+        },
+        leftAnnotations: [
+          {
+            value: 500,
+            color: '#ff9900',
+            label: 'Alarm Threshold (500ms)',
+          },
+        ],
+        width: 8,
+        height: 6,
+      }),
+      // Context Summary Latency
+      new cloudwatch.GraphWidget({
+        title: 'Context Summary Latency',
+        left: [
+          new cloudwatch.Metric({
+            namespace: 'VoiceAgent/Pipeline',
+            metricName: 'ContextSummaryLatency',
+            dimensionsMap: {
+              Environment: props.environment,
+            },
+            statistic: 'Average',
+            period: cdk.Duration.minutes(1),
+            label: 'Avg Summary',
+            color: '#9467bd',
+          }),
+          new cloudwatch.Metric({
+            namespace: 'VoiceAgent/Pipeline',
+            metricName: 'ContextSummaryLatency',
+            dimensionsMap: {
+              Environment: props.environment,
+            },
+            statistic: 'p95',
+            period: cdk.Duration.minutes(1),
+            label: 'P95 Summary',
+            color: '#e377c2',
+          }),
+        ],
+        leftYAxis: {
+          min: 0,
+          label: 'Milliseconds',
+        },
+        width: 8,
+        height: 6,
+      })
+    );
+
+    // Row 11b: Per-Agent-Node Breakdowns
+    // SEARCH expressions automatically discover new agent nodes as capability
+    // agents are deployed via CloudMap -- no dashboard redeployment needed.
+    const logGroupName = `/ecs/${resourcePrefix}-voice-agent`;
+
+    dashboard.addWidgets(
+      // Response Latency by Agent Node
+      new cloudwatch.GraphWidget({
+        title: 'Response Latency by Agent Node',
+        left: [
+          new cloudwatch.MathExpression({
+            expression:
+              'SEARCH(\'{VoiceAgent/Pipeline,Environment,AgentNode} MetricName="AgentResponseLatency"\', \'Average\', 60)',
+            label: '',
+            period: cdk.Duration.minutes(1),
+          }),
+        ],
+        leftYAxis: {
+          min: 0,
+          label: 'ms',
+        },
+        width: 8,
+        height: 6,
+        period: cdk.Duration.minutes(1),
+      }),
+      // Tool Execution by Agent Node
+      new cloudwatch.GraphWidget({
+        title: 'Tool Execution by Agent Node',
+        left: [
+          new cloudwatch.MathExpression({
+            expression:
+              'SEARCH(\'{VoiceAgent/Pipeline,Environment,AgentNode,ToolName} MetricName="ToolExecutionTime"\', \'Average\', 60)',
+            label: '',
+            period: cdk.Duration.minutes(1),
+          }),
+        ],
+        leftYAxis: {
+          min: 0,
+          label: 'ms',
+        },
+        width: 8,
+        height: 6,
+        period: cdk.Duration.minutes(1),
+      }),
+      // Agent Node Timeline (Log Insights bar chart)
+      new cloudwatch.LogQueryWidget({
+        title: 'Agent Node Timeline (Last 1h)',
+        logGroupNames: [logGroupName],
+        queryLines: [
+          'fields @timestamp, agent_node, event',
+          'filter event = "turn_completed" and ispresent(agent_node)',
+          'stats count(*) as turns by agent_node, bin(5m)',
+        ],
+        view: cloudwatch.LogQueryVisualizationType.BAR,
+        width: 8,
+        height: 6,
+      })
+    );
+
     return dashboard;
   }
 
@@ -1490,7 +1763,7 @@ export class VoiceAgentMonitoringConstruct extends Construct {
     new logs.QueryDefinition(this, 'ConversationFlowQuery', {
       queryDefinitionName: `${resourcePrefix}/conversation-flow`,
       queryString: new logs.QueryString({
-        fields: ['@timestamp', 'turn_number', 'speaker', 'content'],
+        fields: ['@timestamp', 'turn_number', 'speaker', 'content', 'agent_node'],
         filterStatements: ['call_id = "CALL_ID_PLACEHOLDER"', 'event = "conversation_turn"'],
         sort: '@timestamp asc',
       }),
@@ -1502,7 +1775,7 @@ export class VoiceAgentMonitoringConstruct extends Construct {
       queryDefinitionName: `${resourcePrefix}/audio-quality-issues`,
       queryString: new logs.QueryString({
         fields: ['@timestamp', 'call_id', 'avg_rms_db', 'turn_number'],
-        filterStatements: ['event = "turn_completed"', 'audio_rms_db < -55'],
+        filterStatements: ['event = "turn_completed"', 'audio_rms_db < -70'],
         sort: '@timestamp desc',
         limit: 50,
       }),
@@ -1537,7 +1810,7 @@ export class VoiceAgentMonitoringConstruct extends Construct {
     new logs.QueryDefinition(this, 'TraceCallQuery', {
       queryDefinitionName: `${resourcePrefix}/trace-call`,
       queryString: new logs.QueryString({
-        fields: ['@timestamp', 'event', 'turn_number', 'speaker', 'content', 'error_category', 'AvgE2ELatency'],
+        fields: ['@timestamp', 'event', 'turn_number', 'speaker', 'content', 'agent_node', 'error_category', 'AvgE2ELatency'],
         filterStatements: ['call_id = "CALL_ID_PLACEHOLDER"'],
         sort: '@timestamp asc',
       }),
@@ -1554,6 +1827,42 @@ export class VoiceAgentMonitoringConstruct extends Construct {
         limit: 50,
       }),
       logGroups: [logs.LogGroup.fromLogGroupName(this, 'LogGroup9', logGroupName)],
+    });
+
+    // Query: Agent transitions (multi-agent flows)
+    new logs.QueryDefinition(this, 'AgentTransitionsQuery', {
+      queryDefinitionName: `${resourcePrefix}/agent-transitions`,
+      queryString: new logs.QueryString({
+        fields: ['@timestamp', 'call_id', 'from_node', 'to_node', 'reason', 'transition_latency_ms', 'transition_number', 'loop_protection'],
+        filterStatements: ['event = "agent_transition"'],
+        sort: '@timestamp desc',
+        limit: 50,
+      }),
+      logGroups: [logs.LogGroup.fromLogGroupName(this, 'LogGroup10', logGroupName)],
+    });
+
+    // Query: Flow-aware conversation trace for a specific call
+    // Shows conversation turns AND agent transitions interleaved chronologically.
+    new logs.QueryDefinition(this, 'FlowConversationTraceQuery', {
+      queryDefinitionName: `${resourcePrefix}/flow-conversation-trace`,
+      queryString: new logs.QueryString({
+        fields: ['@timestamp', 'event', 'speaker', 'content', 'agent_node', 'from_node', 'to_node', 'reason', 'turn_number'],
+        filterStatements: ['call_id = "CALL_ID_PLACEHOLDER"', 'event in ["conversation_turn", "agent_transition", "barge_in"]'],
+        sort: '@timestamp asc',
+      }),
+      logGroups: [logs.LogGroup.fromLogGroupName(this, 'LogGroup11', logGroupName)],
+    });
+
+    // Query: Agent node progression for a specific call
+    // Shows chronological agent sequence with turns and transitions.
+    new logs.QueryDefinition(this, 'AgentNodeProgressionQuery', {
+      queryDefinitionName: `${resourcePrefix}/agent-node-progression`,
+      queryString: new logs.QueryString({
+        fields: ['@timestamp', 'event', 'agent_node', 'from_node', 'to_node', 'reason', 'speaker', 'content'],
+        filterStatements: ['call_id = "CALL_ID_PLACEHOLDER"', 'event in ["turn_completed", "agent_transition", "conversation_turn"]'],
+        sort: '@timestamp asc',
+      }),
+      logGroups: [logs.LogGroup.fromLogGroupName(this, 'LogGroup12', logGroupName)],
     });
   }
 }

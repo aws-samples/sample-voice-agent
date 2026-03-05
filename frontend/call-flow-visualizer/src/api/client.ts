@@ -12,12 +12,14 @@ async function fetchJson<T>(url: string): Promise<T> {
 
 export async function listCalls(params?: {
   date_from?: string;
+  days_back?: number;
   disposition?: string;
   limit?: number;
   next_token?: string;
 }): Promise<CallListResponse> {
   const searchParams = new URLSearchParams();
   if (params?.date_from) searchParams.set('date_from', params.date_from);
+  if (params?.days_back) searchParams.set('days_back', String(params.days_back));
   if (params?.disposition) searchParams.set('disposition', params.disposition);
   if (params?.limit) searchParams.set('limit', String(params.limit));
   if (params?.next_token) searchParams.set('next_token', params.next_token);

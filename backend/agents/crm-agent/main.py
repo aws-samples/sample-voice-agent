@@ -31,6 +31,7 @@ import time
 
 import requests
 import structlog
+from a2a.types import AgentSkill
 from crm_client import CRMClient, CRMError
 from strands import Agent, tool
 from strands.models import BedrockModel
@@ -562,12 +563,52 @@ def main():
     task_ip = _get_task_private_ip()
     http_url = f"http://{task_ip}:{PORT}/" if task_ip else None
 
+    # Explicit skill definitions with provides/requires tags for dependency
+    # gating. The voice agent's flow system reads these tags to enforce
+    # prerequisites (e.g., appointment requires customer_id from CRM).
+    skills = [
+        AgentSkill(
+            id="lookup_customer",
+            name="lookup_customer",
+            description=(
+                "Search for a customer by their phone number and retrieve their "
+                "profile information including name, account type, and open cases."
+            ),
+            tags=["provides:customer_id"],
+        ),
+        AgentSkill(
+            id="create_support_case",
+            name="create_support_case",
+            description="Create a new support case for a customer.",
+            tags=["requires:customer_id"],
+        ),
+        AgentSkill(
+            id="add_case_note",
+            name="add_case_note",
+            description="Add a note to an existing support case.",
+            tags=["requires:customer_id"],
+        ),
+        AgentSkill(
+            id="verify_account_number",
+            name="verify_account_number",
+            description="Verify customer identity using the last 4 digits of their account number.",
+            tags=["requires:customer_id"],
+        ),
+        AgentSkill(
+            id="verify_recent_transaction",
+            name="verify_recent_transaction",
+            description="Verify customer identity using recent transaction details.",
+            tags=["requires:customer_id"],
+        ),
+    ]
+
     server = A2AServer(
         agent=agent,
         host="0.0.0.0",
         port=PORT,
         http_url=http_url,
         version="0.1.0",
+        skills=skills,
     )
 
     logger.info("crm_agent_starting", port=PORT)

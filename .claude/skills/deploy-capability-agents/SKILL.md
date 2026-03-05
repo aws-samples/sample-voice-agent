@@ -1,6 +1,6 @@
 ---
 name: deploy-capability-agents
-description: Deploys optional A2A capability agents (Knowledge Base, CRM) that extend the voice agent with new skills. Explains the A2A architecture, enables the capability registry, deploys agent stacks, and verifies discovery. Use after the core deployment and Daily setup are complete.
+description: Deploys optional A2A capability agents (Knowledge Base, CRM, Appointment) that extend the voice agent with new skills. Explains the A2A architecture, enables the capability registry, deploys agent stacks, and verifies discovery. Use after the core deployment and Daily setup are complete.
 ---
 
 # Deploy Capability Agents
@@ -8,9 +8,9 @@ description: Deploys optional A2A capability agents (Knowledge Base, CRM) that e
 You are guiding the user through extending their voice agent with A2A (Agent-to-Agent) capability agents. This is optional — the voice agent works without them, but they add powerful features.
 
 ## When This Skill Activates
-- User says "deploy agents", "add KB", "add CRM", "capability agents"
+- User says "deploy agents", "add KB", "add CRM", "add appointment", "capability agents"
 - User finished `/configure-daily` and wants to extend the agent
-- User asks about knowledge base, RAG, customer lookup, or A2A
+- User asks about knowledge base, RAG, customer lookup, appointments, scheduling, or A2A
 
 ## Prerequisites
 
@@ -49,12 +49,12 @@ A2A Architecture:
                     ┌────────▼────────┐
                     │    CloudMap     │
                     │  (discovery)    │
-                    └──┬──────────┬──┘
-                       │          │
-              ┌────────▼──┐  ┌───▼────────┐
-              │  KB Agent  │  │ CRM Agent  │
-              │ (ECS spoke)│  │(ECS spoke) │
-              └────────────┘  └────────────┘
+                    └──┬─────┬─────┬──┘
+                       │     │     │
+              ┌────────▼─┐ ┌─▼────────┐ ┌▼───────────┐
+              │ KB Agent  │ │CRM Agent │ │Appointment │
+              │(ECS spoke)│ │(ECS spoke)│ │  Agent     │
+              └───────────┘ └──────────┘ └────────────┘
 ```
 
 Key points:
@@ -88,10 +88,11 @@ Present the available agents and let the user choose:
 
 | Agent | What It Does | Stacks Deployed | Test Prompt |
 |-------|-------------|-----------------|-------------|
-| **Knowledge Base** | RAG search over documents in `resources/` (FAQ, policies, product info) | `VoiceAgentKnowledgeBase` + `VoiceAgentKbAgent` | "What's your return policy?" |
-| **CRM** | Customer lookup, case creation, case updates via DynamoDB | `VoiceAgentCRM` + `VoiceAgentCrmAgent` | "Can you look up my account?" |
+| **Knowledge Base** | RAG search over documents in `resources/` (troubleshooting guides, service info, policies) | `VoiceAgentKnowledgeBase` + `VoiceAgentKbAgent` | "My printer keeps disconnecting from the network" |
+| **CRM** | Customer lookup, case creation, case updates via DynamoDB | `VoiceAgentCRM` + `VoiceAgentCrmAgent` | "Can you look up my account? My number is 555-0100" |
+| **Appointment** | Appointment scheduling, availability checks, booking/cancellation | `VoiceAgentAppointment` + `VoiceAgentAppointmentAgent` | "I need to schedule an on-site repair" |
 
-Ask: "Which agents would you like to deploy? You can deploy one or both."
+Ask: "Which agents would you like to deploy? You can deploy one, some, or all three."
 
 ### Phase 3: Enable the Capability Registry
 
@@ -109,10 +110,16 @@ The voice agent reads this flag at the start of each call. No container restart 
 
 **Get confirmation before deploying.** Show the account ID and region.
 
+> **Reminder:** If you deployed the core infrastructure with `USE_CLOUD_APIS=true`, you must set it for capability agent deploys too. This ensures the SageMaker stub stack is used when CDK resolves dependencies:
+> ```bash
+> export USE_CLOUD_APIS=true
+> export CDK_DOCKER=finch  # or 'docker'
+> ```
+
 #### Knowledge Base Agent
 
 ```bash
-USE_CLOUD_APIS=true npx cdk deploy VoiceAgentKnowledgeBase VoiceAgentKbAgent --require-approval never
+npx cdk deploy VoiceAgentKnowledgeBase VoiceAgentKbAgent --require-approval never
 ```
 
 This deploys:
@@ -124,7 +131,7 @@ Takes ~5-8 minutes. The KB agent uses a direct tool executor (bypasses inner LLM
 #### CRM Agent
 
 ```bash
-USE_CLOUD_APIS=true npx cdk deploy VoiceAgentCRM VoiceAgentCrmAgent --require-approval never
+npx cdk deploy VoiceAgentCRM VoiceAgentCrmAgent --require-approval never
 ```
 
 This deploys:
@@ -156,6 +163,41 @@ There are also 2 demo support cases (a billing dispute for John Smith and a serv
 
 To reset and re-seed later: `DELETE /admin/reset` followed by `POST /admin/seed`.
 
+#### Appointment Agent
+
+```bash
+npx cdk deploy VoiceAgentAppointment VoiceAgentAppointmentAgent --require-approval never
+```
+
+This deploys:
+- **VoiceAgentAppointment** — DynamoDB table + Appointment API Lambda with 5 service types and scheduling logic
+- **VoiceAgentAppointmentAgent** — ECS Fargate container that exposes 5 appointment tools via A2A (check availability, book, get, cancel, reschedule)
+
+Takes ~5-8 minutes.
+
+**Seed the Appointment system with demo data** — the DynamoDB table is created empty. The Appointment API has a `/admin/seed` endpoint:
+
+```bash
+APPT_URL=$(aws ssm get-parameter --name "/voice-agent/appointments/api-url" --query 'Parameter.Value' --output text)
+curl -s -X POST "$APPT_URL/admin/seed" | python3 -m json.tool
+```
+
+Expected response: `{"message": "Demo data seeded successfully", "appointments_seeded": 6}`
+
+The seed data includes 5 service types and 6 sample appointments for the same customers as the CRM:
+
+| Service Type | Duration | Description |
+|-------------|----------|-------------|
+| on_site_repair | 2 hours | On-site hardware/network repair |
+| network_setup | 3 hours | Network installation and configuration |
+| hardware_upgrade | 2 hours | Hardware component upgrades |
+| general_consultation | 1 hour | General IT consultation |
+| preventive_maintenance | 2 hours | Preventive maintenance visit |
+
+> **Without seeding, availability checks work but customer appointment history is empty.** Seed both CRM and Appointment for the full demo experience.
+
+To reset and re-seed later: `DELETE /admin/reset` followed by `POST /admin/seed`.
+
 ### Phase 5: Verify Agent Discovery
 
 After deployment, wait ~1 minute for the agents to register in CloudMap and be discovered. Then verify:
@@ -179,8 +221,9 @@ Prompt the user to make a test call:
 ```
 Capability agents deployed:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
-  [status] Knowledge Base — "What's your return policy?"
+  [status] Knowledge Base — "My printer keeps disconnecting from the network"
   [status] CRM           — "Look up the account for 555-0100"
+  [status] Appointment   — "I need to schedule an on-site repair"
 
 Call [phone number] and try one of the prompts above.
 The voice agent discovers new agents automatically — no restart needed.
@@ -201,6 +244,21 @@ else:
 "
 ```
 
+If the Appointment agent was deployed, confirm seed data:
+```bash
+APPT_URL=$(aws ssm get-parameter --name "/voice-agent/appointments/api-url" --query 'Parameter.Value' --output text)
+curl -s "$APPT_URL/service-types" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+if not data:
+    print('WARNING: No service types found. Run POST /admin/seed to load demo data.')
+else:
+    print(f'{len(data)} service type(s) loaded:')
+    for s in data:
+        print(f'  {s.get(\"service_type\", \"?\")} — {s.get(\"name\", \"?\")}')
+"
+```
+
 If a tool isn't responding on the first call, remind the user:
 - The registry polls every 30 seconds — wait a moment and try again
 - Check ECS console to confirm the agent container is running and healthy
@@ -213,6 +271,7 @@ Capability Agent Deployment Complete:
 ✅ Capability registry enabled
 [status] Knowledge Base agent — deployed / skipped
 [status] CRM agent — deployed / skipped
+[status] Appointment agent — deployed / skipped
 ✅ Agents discoverable via CloudMap
 
 Your voice agent now has [N] additional tools available.

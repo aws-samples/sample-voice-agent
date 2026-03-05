@@ -29,16 +29,35 @@ Caller (Phone)
                                                                                           |
                            LLM (Bedrock Claude) + Tools ──────────────────────────────+
                                 |                |
-                          Local Tools      A2A Agents (CloudMap)
-                        (time, transfer)    (KB, CRM)
+                           Local Tools      A2A Agents (CloudMap)
+                         (time, transfer)    (KB, CRM, Appointment)
 ```
 
 ## Deployment Modes
 
-| Mode | STT/TTS | Pros | Cons |
-|------|---------|------|------|
-| **Cloud API** | Deepgram + Cartesia cloud APIs | Simple, no GPU quotas, no Marketplace | Audio leaves VPC, needs API keys |
-| **SageMaker** | Self-hosted Deepgram on GPU instances | Audio stays in VPC, data residency | GPU quotas, Marketplace subscriptions |
+| Mode | STT/TTS | Env Var | Pros | Cons |
+|------|---------|---------|------|------|
+| **Cloud API** | Deepgram + Cartesia cloud APIs | `USE_CLOUD_APIS=true` | Simple, no GPU quotas, no Marketplace | Audio leaves VPC, needs API keys |
+| **SageMaker** | Self-hosted Deepgram on GPU instances | *(do not set USE_CLOUD_APIS)* | Audio stays in VPC, data residency | GPU quotas, Marketplace subscriptions |
+
+### The `USE_CLOUD_APIS` Environment Variable
+
+This is the **single most important flag** for deployment. It controls which SageMaker stack CDK instantiates:
+
+| Value | Stack Deployed | What It Does |
+|-------|---------------|--------------|
+| `true` | `SageMakerStubStack` | Writes placeholder SSM params; ECS reads them and uses Deepgram/Cartesia cloud APIs |
+| *(unset or false)* | `SageMakerStack` | Creates real SageMaker GPU endpoints using Deepgram Marketplace model package ARNs |
+
+**Common failure mode:** Running `cdk deploy` without `USE_CLOUD_APIS=true` in cloud API mode deploys the real `SageMakerStack`, which fails because the model package ARNs are placeholders. The stack rolls back to `UPDATE_ROLLBACK_COMPLETE`. Fix: set `USE_CLOUD_APIS=true` and redeploy.
+
+Both stacks share the same CloudFormation stack name (`VoiceAgentSageMaker`) so switching modes is safe. The ECS stack detects the mode by checking if the SSM endpoint name contains `cloud-api-mode`.
+
+**Always export the flag in your shell session before any CDK command:**
+```bash
+export USE_CLOUD_APIS=true    # for cloud API mode
+export CDK_DOCKER=finch       # or 'docker'
+```
 
 ## Skill Workflow Order
 
@@ -70,9 +89,11 @@ Every skill follows: **Check → Explain → Confirm → Execute → Verify**
 Proactively explain common issues:
 - **"ExpiredToken"** → "Your AWS session expired. Run `aws sso login` or refresh your credentials, then try again."
 - **"ResourceLimitExceeded"** → "You've hit an AWS service limit. GPU quotas for SageMaker can take 24-48 hours to increase."
-- **Docker build failures** → "The voice agent container is ~800MB and takes a few minutes to build. Make sure Docker is running."
+- **"ModelPackage does not exist"** → "You're deploying the real SageMaker stack without valid model package ARNs. Set `USE_CLOUD_APIS=true` for cloud API mode, or configure the Deepgram Marketplace ARNs for SageMaker mode."
+- **Docker build failures** → "The voice agent container is ~800MB and takes a few minutes to build. Make sure Docker/finch is running."
 - **SageMaker endpoint stuck** → "SageMaker endpoints take 10-15 minutes to provision. This is normal."
 - **Daily webhook not working** → "Check that the API Gateway URL is HTTPS and publicly accessible. Daily requires HTTPS."
+- **Stack in UPDATE_ROLLBACK_COMPLETE** → "The last update failed and rolled back. The stack is functional and accepts new updates. Redeploy with the correct environment variables."
 
 ### Cost Responsibility
 The user is responsible for all AWS and third-party service charges incurred by the resources deployed in this project. Do not quote specific cost estimates. Instead:

@@ -288,3 +288,31 @@ class TestCreateA2AToolHandler:
         # Result callback should still be called with the actual result
         result_callback.assert_called_once()
         assert "Response" in result_callback.call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_custom_category_passed_to_metrics(self):
+        """Test that a custom category is used instead of default 'a2a'."""
+        mock_agent = AsyncMock()
+        mock_agent.invoke_async.return_value = _make_agent_result("Response")
+
+        mock_collector = MagicMock()
+
+        handler = create_a2a_tool_handler(
+            "search_knowledge_base",
+            mock_agent,
+            collector=mock_collector,
+            category="knowledge_base",
+        )
+        result_callback = AsyncMock()
+        params = _make_params(
+            function_name="search_knowledge_base",
+            args={"query": "test"},
+            result_callback=result_callback,
+        )
+
+        await handler(params)
+
+        mock_collector.record_tool_execution.assert_called_once()
+        call_kwargs = mock_collector.record_tool_execution.call_args
+        assert call_kwargs[1]["category"] == "knowledge_base"
+        assert call_kwargs[1]["status"] == "success"

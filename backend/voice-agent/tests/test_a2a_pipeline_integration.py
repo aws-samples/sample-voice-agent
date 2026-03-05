@@ -339,6 +339,7 @@ class TestRegisterCapabilities:
                 agent=registry.get_agent_for_skill("remote_search").agent,
                 timeout_seconds=30.0,
                 collector=collector,
+                category="system",  # "Agent" doesn't match any known category
             )
 
 
@@ -438,6 +439,58 @@ class TestA2AConfig:
 
 
 # ============================================================
+# Tests: Audio quality threshold config
+# ============================================================
+
+
+class TestAudioQualityThresholdConfig:
+    """Tests for poor audio threshold SSM configuration."""
+
+    def _make_service(self):
+        from app.services.config_service import ConfigService
+
+        service = ConfigService.__new__(ConfigService)
+        service.region = "us-east-1"
+        service.KNOWLEDGE_BASE_PATH = "/voice-agent/knowledge-base"
+        service.CONFIG_PATH = "/voice-agent/config"
+        service.SESSIONS_PATH = "/voice-agent/sessions"
+        service.STORAGE_PATH = "/voice-agent/storage"
+        service.A2A_PATH = "/voice-agent/a2a"
+        return service
+
+    def test_build_config_reads_audio_threshold(self):
+        """ConfigService._build_config reads poor-audio-threshold-db from SSM."""
+        service = self._make_service()
+        params = {
+            "/voice-agent/config/poor-audio-threshold-db": "-65.0",
+        }
+        config = service._build_config(params)
+        assert config.audio.poor_audio_threshold_db == -65.0
+
+    def test_build_config_audio_threshold_defaults(self):
+        """Audio threshold defaults to -70.0 when SSM param is missing."""
+        service = self._make_service()
+        config = service._build_config({})
+        assert config.audio.poor_audio_threshold_db == -70.0
+
+    def test_build_config_audio_threshold_env_var_fallback(self):
+        """Audio threshold falls back to POOR_AUDIO_THRESHOLD_DB env var."""
+        service = self._make_service()
+        with patch.dict(os.environ, {"POOR_AUDIO_THRESHOLD_DB": "-62.0"}):
+            config = service._build_config({})
+        assert config.audio.poor_audio_threshold_db == -62.0
+
+    def test_build_config_audio_threshold_invalid_falls_back(self):
+        """Invalid SSM value falls back to -70.0."""
+        service = self._make_service()
+        params = {
+            "/voice-agent/config/poor-audio-threshold-db": "not-a-number",
+        }
+        config = service._build_config(params)
+        assert config.audio.poor_audio_threshold_db == -70.0
+
+
+# ============================================================
 # Tests: Pipeline feature flag routing
 # ============================================================
 
@@ -447,6 +500,7 @@ class TestPipelineFeatureFlagRouting:
 
     @patch("app.pipeline_ecs._get_enable_tool_calling", return_value=True)
     @patch("app.pipeline_ecs._get_enable_capability_registry", return_value=True)
+    @patch("app.pipeline_ecs._get_enable_flow_agents", return_value=False)
     @patch("app.pipeline_ecs._register_capabilities")
     @patch("app.pipeline_ecs._get_enable_filler_phrases", return_value=False)
     @patch("app.pipeline_ecs._get_enable_audio_quality", return_value=False)
@@ -476,6 +530,7 @@ class TestPipelineFeatureFlagRouting:
         mock_audio_quality,
         mock_filler,
         mock_register_caps,
+        mock_enable_flows,
         mock_enable_registry,
         mock_enable_tools,
     ):
@@ -524,6 +579,7 @@ class TestPipelineFeatureFlagRouting:
 
     @patch("app.pipeline_ecs._get_enable_tool_calling", return_value=True)
     @patch("app.pipeline_ecs._get_enable_capability_registry", return_value=False)
+    @patch("app.pipeline_ecs._get_enable_flow_agents", return_value=False)
     @patch("app.pipeline_ecs._register_tools")
     @patch("app.pipeline_ecs._get_enable_filler_phrases", return_value=False)
     @patch("app.pipeline_ecs._get_enable_audio_quality", return_value=False)
@@ -553,6 +609,7 @@ class TestPipelineFeatureFlagRouting:
         mock_audio_quality,
         mock_filler,
         mock_register_tools,
+        mock_enable_flows,
         mock_enable_registry,
         mock_enable_tools,
     ):

@@ -65,10 +65,13 @@ export AWS_PROFILE=<your-profile>
 |----------|---------|-------------|
 | `ENVIRONMENT` | `production` | Deployment environment (poc, dev, staging, prod) - used as CloudWatch dimension |
 | `ENABLE_AUDIO_QUALITY_MONITORING` | `true` | Enable AudioQualityObserver for RMS/peak/silence metrics |
-| `ENABLE_CONVERSATION_LOGGING` | `false` | Enable ConversationObserver for transcript logging |
+| `POOR_AUDIO_THRESHOLD_DB` | `-70.0` | Poor audio threshold in dBFS. Audio below this level is flagged as poor quality. Calibrated for PSTN/SIP dial-in. Also configurable via SSM at `/voice-agent/config/poor-audio-threshold-db`. Uses dual-signal detection: a turn is only flagged as poor when RMS is below this threshold AND STT confidence is absent or below 0.9 (see below). |
+| `ENABLE_CONVERSATION_LOGGING` | `false` | Enable ConversationObserver for transcript logging. Captures user speech (`speaker: "user"`), LLM responses (`speaker: "assistant"`), and non-LLM TTS such as transition phrases, filler phrases, and tool spoken responses (`speaker: "system"`) |
 | `ENABLE_TOOL_CALLING` | `true` | Enable LLM tool calling (function calling) for executing actions |
 | `ENABLE_FILLER_PHRASES` | `true` | Enable filler phrases during tool execution delays |
 | `FILLER_DELAY_THRESHOLD_MS` | `1500` | Milliseconds to wait before playing filler phrase |
+| `ENABLE_TOOL_RESULT_LOGGING` | `false` | Enable tool result content in structured logs. Also configurable via SSM at `/voice-agent/config/enable-tool-result-logging`. When enabled, `result_summary` (truncated, PII-redacted) is added to `tool_execution`, `a2a_tool_call_success`, and `flow_a2a_call_success` log events at INFO level. Full `result_content` is logged at DEBUG level. |
+| `TOOL_RESULT_LOG_MAX_CHARS` | `500` | Maximum characters for `result_summary` field in tool result logs |
 
 ### LLM Configuration
 
@@ -84,13 +87,40 @@ export AWS_PROFILE=<your-profile>
 | `A2A_CACHE_TTL_SECONDS` | `60` | Response cache TTL for A2A tool results |
 | `A2A_CACHE_MAX_SIZE` | `100` | Max cached A2A responses per tool handler |
 
-Feature flag via SSM at `/voice-agent/config/enable-capability-registry` (default: `false`). When enabled, the voice agent discovers capability agents (KB, CRM) via CloudMap and registers their skills as LLM tools via the A2A protocol.
+Feature flag via SSM at `/voice-agent/config/enable-capability-registry` (default: `false`). When enabled, the voice agent discovers capability agents (KB, CRM, Appointment) via CloudMap and registers their skills as LLM tools via the A2A protocol.
 
 For a step-by-step guide on adding a new capability agent, see [Adding a Capability Agent](docs/guides/adding-a-capability-agent.md). For architecture details, see [Capability Agent Pattern](docs/patterns/capability-agent-pattern.md).
 
 Additional SSM config:
 - `/voice-agent/a2a/poll-interval-seconds` (default: `30`) - CloudMap polling interval
 - `/voice-agent/a2a/tool-timeout-seconds` (default: `30`) - A2A call timeout
+
+### Multi-Agent Flows Configuration
+
+When enabled, the voice agent uses **Pipecat Flows** to dynamically swap LLM context (system prompt + tools) mid-call based on discovered A2A capability agents. Each agent becomes a specialist node that callers can be routed to. See [Multi-Agent Flows Guide](docs/guides/multi-agent-flows.md) for details.
+
+| SSM Parameter | Default | Description |
+|---------------|---------|-------------|
+| `/voice-agent/config/enable-flow-agents` | `false` | Enable multi-agent Flows mode. Requires `enable-capability-registry` to also be `true`. |
+| `/voice-agent/config/flow-max-transitions` | `10` | Max agent transitions per call before loop protection activates and forces return to orchestrator. |
+
+**Prerequisites:** Both `enable-capability-registry` and `enable-flow-agents` must be `true`. At least one A2A capability agent must be deployed and discoverable via CloudMap.
+
+**How it works:** At pipeline creation, the voice agent queries CloudMap for registered agents, reads their Agent Cards, and builds a fully connected flow graph. Each discovered agent becomes a specialist node with its card's description as persona and its skills as scoped tools. A generic `transfer(target, reason)` function handles all inter-node transitions.
+
+**Dependency gating:** Agent Card skills can declare `provides:<key>` and `requires:<key>` tags. When a transfer targets an agent whose required dependencies are not yet satisfied, the system redirects to the provider agent with a reason explaining the caller's goal. For example, the Appointment agent's booking tools `requires:customer_id`, which is `provides:customer_id` by the CRM agent's `lookup_customer` skill.
+
+### Appointment Agent Configuration
+
+These env vars are set on the **Appointment capability agent** container (not the voice agent):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `APPOINTMENT_API_URL` | *required* | Base URL for the Appointment REST API -- set by CDK from SSM parameter `/voice-agent/appointments/api-url` |
+| `AWS_REGION` | `us-east-1` | AWS region for Bedrock model access |
+| `PORT` | `8000` | Agent listen port |
+
+The Appointment agent uses the `StrandsA2AExecutor` pattern (inner LLM for multi-tool routing) with 5 tools: `check_availability`, `book_appointment`, `cancel_appointment`, `reschedule_appointment`, `list_appointments`. The backend is a Lambda + API Gateway REST API backed by DynamoDB with seed data for demo scenarios.
 
 ### Knowledge Base Agent Configuration
 
@@ -169,10 +199,16 @@ The voice agent emits metrics to the `VoiceAgent/Pipeline` namespace. Key metric
 - **TurnCount**: Number of conversation turns per call
 - **InterruptionCount**: Barge-in events per call
 - **AudioRMS/AudioPeak**: Audio quality levels (dBFS)
-- **PoorAudioTurns**: Turns with audio below -55 dBFS threshold
+- **PoorAudioTurns**: Turns with audio below poor audio threshold (default -70 dBFS, configurable via SSM) AND absent/low STT confidence (< 0.9). Uses dual-signal detection to avoid false positives on quiet but clear PSTN audio.
 - **ActiveSessions**: Current concurrent session count
 - **ToolExecutionTime**: Tool execution duration (ms) - when tool calling enabled
 - **ToolInvocationCount**: Number of tool invocations - when tool calling enabled
+- **AgentTransitionCount**: Number of agent transitions per call - when Flows enabled
+- **AgentTransitionLatency**: Time from transfer function call to new node creation (ms) - when Flows enabled
+- **ContextSummaryLatency**: Time to generate RESET_WITH_SUMMARY on transition (ms) - when Flows enabled
+- **TransitionLoopProtection**: Emitted when a call exceeds `flow-max-transitions` and is forced back to orchestrator
+
+When Flows mode is enabled, metrics include an `agent_node` dimension identifying which specialist node was active (e.g., `kb-agent`, `crm-agent`, `appointment-agent`, `orchestrator`). This enables per-node latency and tool usage breakdowns in CloudWatch.
 
 ### CloudWatch Alarms
 
@@ -186,5 +222,7 @@ The voice agent emits metrics to the `VoiceAgent/Pipeline` namespace. Key metric
 | Sessions Per Task High | Avg > 4.0 for 2 consecutive periods | Approaching per-container capacity; check if scaling policies are responding |
 | Task Protection Failure | >= 1 `task_protection_all_retries_exhausted` in 5 min | Task protection API failed; active calls may not be safe from scale-in |
 | Metric Staleness | `SessionsPerTask` INSUFFICIENT_DATA for 5 periods | Session counter Lambda stopped emitting; auto-scaling is blind |
+| Flow Transition Latency High | Avg > 500ms for 3 periods | Context swap taking too long; check LLM summary generation time |
+| Flow Loop Protection | >= 1 activation in 5 min | LLM stuck in routing loop; review call transcripts for confused intent classification |
 
 Dashboard URL is output as `VoiceAgentEcs.DashboardUrl` in CloudFormation outputs.

@@ -45,6 +45,7 @@ from pipecat.frames.frames import (
     LLMFullResponseStartFrame,
     TextFrame,
     TranscriptionFrame,
+    TTSSpeakFrame,
     TTSStartedFrame,
     TTSStoppedFrame,
     UserStartedSpeakingFrame,
@@ -227,6 +228,17 @@ class ConversationObserver(BaseObserver):
                 self._flush_bot_response()
                 self._llm_responding = False
 
+        # Capture non-LLM TTS: transition phrases, filler phrases, spoken_response
+        # These bypass the LLM pipeline and would otherwise be invisible in logs.
+        elif isinstance(frame, TTSSpeakFrame):
+            if isinstance(source, LLMService):
+                return  # LLM speech is already captured via TextFrame accumulation
+            if not _is_new_frame(self._seen, data):
+                return
+            text = frame.text.strip() if frame.text else ""
+            if text:
+                self._log_conversation_turn(speaker="system", content=text)
+
         # Track TTS generation state (for metrics, not barge-in)
         elif isinstance(frame, TTSStartedFrame):
             pass  # TTS generation started (not used for barge-in)
@@ -310,14 +322,17 @@ class ConversationObserver(BaseObserver):
         """Log a conversation turn with correlation fields."""
         turn_number = self._collector.turn_count or 1
 
-        logger.info(
-            "conversation_turn",
+        log_kwargs: dict[str, object] = dict(
             call_id=self._collector.call_id,
             session_id=self._collector.session_id,
             turn_number=turn_number,
             speaker=speaker,
             content=content,
         )
+        agent_node = self._collector.agent_node
+        if agent_node is not None:
+            log_kwargs["agent_node"] = agent_node
+        logger.info("conversation_turn", **log_kwargs)
 
     def _log_barge_in(self) -> None:
         """Log a barge-in event when user interrupts the bot."""
@@ -372,9 +387,10 @@ class AudioQualityObserver(BaseObserver):
 
     # Silence threshold in dBFS (below this is considered silence)
     SILENCE_THRESHOLD_DB = -40.0
-    # Poor audio threshold in dBFS (typical phone audio is -40 to -50 dBFS)
-    # Anything below -55 dBFS is considered too quiet/poor quality
-    POOR_AUDIO_THRESHOLD_DB = -55.0
+    # Default poor audio threshold in dBFS
+    # Calibrated for PSTN/SIP dial-in where normal speech is -62 to -75 dBFS.
+    # Anything below -70 dBFS is considered too quiet/poor quality.
+    DEFAULT_POOR_AUDIO_THRESHOLD_DB = -70.0
     # Max value for 16-bit signed audio
     MAX_AMPLITUDE = 32767
 
@@ -382,6 +398,7 @@ class AudioQualityObserver(BaseObserver):
         self,
         collector: "MetricsCollector",
         enabled: bool = True,
+        poor_audio_threshold_db: Optional[float] = None,
     ):
         """
         Initialize audio quality observer.
@@ -389,10 +406,18 @@ class AudioQualityObserver(BaseObserver):
         Args:
             collector: MetricsCollector for aggregating metrics
             enabled: Enable/disable monitoring
+            poor_audio_threshold_db: Threshold in dBFS below which audio is
+                considered poor quality. Defaults to -70.0 (suitable for PSTN).
+                Configurable via SSM parameter /voice-agent/config/poor-audio-threshold-db.
         """
         super().__init__()
         self._collector = collector
         self._enabled = enabled
+        self._poor_audio_threshold_db = (
+            poor_audio_threshold_db
+            if poor_audio_threshold_db is not None
+            else self.DEFAULT_POOR_AUDIO_THRESHOLD_DB
+        )
 
         # Accumulators for turn-level metrics
         self._rms_samples: List[float] = []
@@ -400,9 +425,6 @@ class AudioQualityObserver(BaseObserver):
         self._silence_start_time: Optional[float] = None
         self._last_speech_end_time: Optional[float] = None
         self._user_speaking = False
-        # Track which turn number we last recorded poor audio for
-        # (prevents counting poor audio multiple times per conversation turn)
-        self._poor_audio_last_turn: int = 0
         self._seen: dict[type, set[int]] = {}
 
         if enabled:
@@ -410,6 +432,7 @@ class AudioQualityObserver(BaseObserver):
                 "audio_quality_observer_created",
                 call_id=collector.call_id,
                 session_id=collector.session_id,
+                poor_audio_threshold_db=self._poor_audio_threshold_db,
             )
 
     async def on_push_frame(self, data: FramePushed) -> None:
@@ -527,29 +550,33 @@ class AudioQualityObserver(BaseObserver):
 
         # Calculate and record turn-level audio quality
         if self._rms_samples:
-            avg_rms_db = sum(self._rms_samples) / len(self._rms_samples)
+            n = len(self._rms_samples)
+            avg_rms_db = sum(self._rms_samples) / n
             self._collector.record_audio_rms(avg_rms_db)
 
-            # Check for poor audio quality - only count once per conversation turn
-            # (VAD may fire multiple times per turn, but we only want to count poor
-            # audio once per actual conversational exchange)
-            current_turn = self._collector.turn_count
-            if avg_rms_db < self.POOR_AUDIO_THRESHOLD_DB:
-                # Only record if we haven't already recorded for this turn
-                if current_turn > self._poor_audio_last_turn:
-                    self._collector.record_poor_audio_turn()
-                    self._poor_audio_last_turn = current_turn
-                    logger.debug(
-                        "poor_audio_detected",
-                        avg_rms_db=round(avg_rms_db, 1),
-                        turn_number=current_turn,
-                        call_id=self._collector.call_id,
-                    )
+            # Calculate distribution stats for threshold tuning analysis
+            min_rms_db = min(self._rms_samples)
+            max_rms_db = max(self._rms_samples)
+            if n > 1:
+                variance = sum((x - avg_rms_db) ** 2 for x in self._rms_samples) / n
+                stddev_rms_db = math.sqrt(variance)
+            else:
+                stddev_rms_db = 0.0
+            self._collector.record_audio_rms_distribution(
+                min_rms_db, max_rms_db, stddev_rms_db
+            )
+
+            # NOTE: Poor audio detection is deferred to MetricsCollector.end_turn()
+            # where both RMS and STT confidence are available for dual-signal detection.
+            # At this point, STT confidence has not yet been recorded on the turn.
 
             logger.debug(
                 "audio_quality_recorded",
                 avg_rms_db=round(avg_rms_db, 1),
-                sample_count=len(self._rms_samples),
+                min_rms_db=round(min_rms_db, 1),
+                max_rms_db=round(max_rms_db, 1),
+                stddev_rms_db=round(stddev_rms_db, 1),
+                frame_count=n,
                 call_id=self._collector.call_id,
             )
 
@@ -899,7 +926,7 @@ class QualityScoreCalculator:
         "excellent_latency_ms": 800,
         "poor_latency_ms": 2000,
         "excellent_audio_db": -30,
-        "poor_audio_db": -55,
+        "poor_audio_db": -70,
         "excellent_confidence": 0.9,
         "poor_confidence": 0.6,
         "excellent_gap_ms": 500,
@@ -907,6 +934,15 @@ class QualityScoreCalculator:
         "excellent_rtt_ms": 50,
         "poor_rtt_ms": 200,
     }
+
+    @classmethod
+    def configure(cls, poor_audio_threshold_db: float) -> None:
+        """Update the poor audio threshold at runtime from config.
+
+        Args:
+            poor_audio_threshold_db: Threshold in dBFS below which audio scores 0.0.
+        """
+        cls.THRESHOLDS["poor_audio_db"] = poor_audio_threshold_db
 
     @classmethod
     def calculate_turn_quality(cls, turn: TurnMetrics) -> float:
@@ -1043,6 +1079,9 @@ class TurnMetrics:
     # Audio quality metrics
     audio_rms_db: Optional[float] = None
     audio_peak_db: Optional[float] = None
+    audio_rms_min_db: Optional[float] = None
+    audio_rms_max_db: Optional[float] = None
+    audio_rms_stddev_db: Optional[float] = None
     silence_duration_ms: Optional[float] = None
 
     # STT Quality metrics
@@ -1073,13 +1112,16 @@ class TurnMetrics:
     # Composite Quality Score
     quality_score: Optional[float] = None  # 0.0 to 1.0
 
+    # Multi-agent flow context
+    agent_node: Optional[str] = None  # Current agent node during this turn
+
     # Content (optional, for conversation logging)
     user_text: Optional[str] = None
     assistant_text: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for logging."""
-        return {
+        result = {
             "turn_number": self.turn_number,
             "stt_latency_ms": self.stt_latency_ms,
             "llm_ttfb_ms": self.llm_ttfb_ms,
@@ -1088,6 +1130,9 @@ class TurnMetrics:
             "agent_response_latency_ms": self.agent_response_latency_ms,
             "audio_rms_db": self.audio_rms_db,
             "audio_peak_db": self.audio_peak_db,
+            "audio_rms_min_db": self.audio_rms_min_db,
+            "audio_rms_max_db": self.audio_rms_max_db,
+            "audio_rms_stddev_db": self.audio_rms_stddev_db,
             "silence_duration_ms": self.silence_duration_ms,
             "stt_confidence_avg": self.stt_confidence_avg,
             "stt_confidence_min": self.stt_confidence_min,
@@ -1108,6 +1153,9 @@ class TurnMetrics:
             "was_abandoned": self.was_abandoned,
             "quality_score": self.quality_score,
         }
+        if self.agent_node is not None:
+            result["agent_node"] = self.agent_node
+        return result
 
 
 @dataclass
@@ -1132,6 +1180,12 @@ class CallMetrics:
     # Status
     completion_status: str = "in_progress"
     error_category: Optional[str] = None
+
+    # Multi-agent flow aggregates
+    agent_transition_count: int = 0
+    loop_protection_activations: int = 0
+    _transition_latencies_ms: List[float] = field(default_factory=list)
+    _summary_latencies_ms: List[float] = field(default_factory=list)
 
     # Turn history (for avg calculations)
     _turn_metrics: List[TurnMetrics] = field(default_factory=list)
@@ -1185,9 +1239,23 @@ class CallMetrics:
         ]
         return sum(values) / len(values) if values else 0.0
 
+    @property
+    def avg_transition_latency_ms(self) -> float:
+        """Average agent transition latency across transitions."""
+        if not self._transition_latencies_ms:
+            return 0.0
+        return sum(self._transition_latencies_ms) / len(self._transition_latencies_ms)
+
+    @property
+    def avg_summary_latency_ms(self) -> float:
+        """Average context summary generation latency."""
+        if not self._summary_latencies_ms:
+            return 0.0
+        return sum(self._summary_latencies_ms) / len(self._summary_latencies_ms)
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for logging."""
-        return {
+        result = {
             "call_id": self.call_id,
             "session_id": self.session_id,
             "environment": self.environment,
@@ -1204,6 +1272,15 @@ class CallMetrics:
             "completion_status": self.completion_status,
             "error_category": self.error_category,
         }
+        # Include multi-agent flow metrics when transitions occurred
+        if self.agent_transition_count > 0:
+            result["agent_transition_count"] = self.agent_transition_count
+            result["avg_transition_latency_ms"] = round(
+                self.avg_transition_latency_ms, 1
+            )
+            result["avg_summary_latency_ms"] = round(self.avg_summary_latency_ms, 1)
+            result["loop_protection_activations"] = self.loop_protection_activations
+        return result
 
 
 # =============================================================================
@@ -1302,6 +1379,17 @@ class EMFLogger:
         metrics_list = []
         metric_values = {}
 
+        # Build dimension sets. When a flow agent_node is active, add it
+        # as an additional dimension for per-node metric breakdowns.
+        dimensions = [
+            ["Environment"],
+            ["Environment", "CallId"],
+        ]
+        extra_properties = {}
+        if turn.agent_node is not None:
+            dimensions.append(["Environment", "AgentNode"])
+            extra_properties["AgentNode"] = turn.agent_node
+
         # Only include metrics that have values
         if turn.stt_latency_ms is not None:
             metrics_list.append({"Name": "STTLatency", "Unit": "Milliseconds"})
@@ -1337,6 +1425,18 @@ class EMFLogger:
         if turn.audio_peak_db is not None:
             metrics_list.append({"Name": "AudioPeak", "Unit": "None"})
             metric_values["AudioPeak"] = round(turn.audio_peak_db, 1)
+
+        if turn.audio_rms_min_db is not None:
+            metrics_list.append({"Name": "AudioRMSMin", "Unit": "None"})
+            metric_values["AudioRMSMin"] = round(turn.audio_rms_min_db, 1)
+
+        if turn.audio_rms_max_db is not None:
+            metrics_list.append({"Name": "AudioRMSMax", "Unit": "None"})
+            metric_values["AudioRMSMax"] = round(turn.audio_rms_max_db, 1)
+
+        if turn.audio_rms_stddev_db is not None:
+            metrics_list.append({"Name": "AudioRMSStdDev", "Unit": "None"})
+            metric_values["AudioRMSStdDev"] = round(turn.audio_rms_stddev_db, 1)
 
         if turn.silence_duration_ms is not None:
             metrics_list.append({"Name": "SilenceDuration", "Unit": "Milliseconds"})
@@ -1402,10 +1502,7 @@ class EMFLogger:
                 "CloudWatchMetrics": [
                     {
                         "Namespace": self.namespace,
-                        "Dimensions": [
-                            ["Environment"],
-                            ["Environment", "CallId"],
-                        ],
+                        "Dimensions": dimensions,
                         "Metrics": metrics_list,
                     }
                 ],
@@ -1414,6 +1511,7 @@ class EMFLogger:
             "CallId": call_id,
             "TurnNumber": turn.turn_number,
             "event": "turn_metrics",
+            **extra_properties,
             **metric_values,
         }
 
@@ -1465,6 +1563,21 @@ class EMFLogger:
             "event": "call_summary",
         }
 
+        # Add multi-agent flow metrics when transitions occurred
+        if metrics.agent_transition_count > 0:
+            emf_log["_aws"]["CloudWatchMetrics"][0]["Metrics"].extend(
+                [
+                    {"Name": "AgentTransitionCount", "Unit": "Count"},
+                    {"Name": "AvgTransitionLatency", "Unit": "Milliseconds"},
+                    {"Name": "LoopProtectionActivations", "Unit": "Count"},
+                ]
+            )
+            emf_log["AgentTransitionCount"] = metrics.agent_transition_count
+            emf_log["AvgTransitionLatency"] = round(
+                metrics.avg_transition_latency_ms, 1
+            )
+            emf_log["LoopProtectionActivations"] = metrics.loop_protection_activations
+
         print(json.dumps(emf_log), flush=True)
 
     def emit_tool_metrics(
@@ -1474,6 +1587,7 @@ class EMFLogger:
         category: str,
         status: str,
         execution_time_ms: float,
+        agent_node: Optional[str] = None,
     ) -> None:
         """
         Emit EMF log for tool execution metrics.
@@ -1484,19 +1598,26 @@ class EMFLogger:
             category: Tool category (customer_info, system, etc.)
             status: Execution status (success, error, timeout, cancelled)
             execution_time_ms: Execution duration in milliseconds
+            agent_node: Optional current flow agent node name
         """
+        dimensions = [
+            ["Environment"],
+            ["Environment", "ToolName"],
+            ["Environment", "ToolCategory"],
+            ["Environment", "ToolStatus"],
+        ]
+        extra_properties = {}
+        if agent_node is not None:
+            dimensions.append(["Environment", "AgentNode", "ToolName"])
+            extra_properties["AgentNode"] = agent_node
+
         emf_log = {
             "_aws": {
                 "Timestamp": int(time.time() * 1000),
                 "CloudWatchMetrics": [
                     {
                         "Namespace": self.namespace,
-                        "Dimensions": [
-                            ["Environment"],
-                            ["Environment", "ToolName"],
-                            ["Environment", "ToolCategory"],
-                            ["Environment", "ToolStatus"],
-                        ],
+                        "Dimensions": dimensions,
                         "Metrics": [
                             {"Name": "ToolExecutionTime", "Unit": "Milliseconds"},
                             {"Name": "ToolInvocationCount", "Unit": "Count"},
@@ -1512,6 +1633,76 @@ class EMFLogger:
             "ToolExecutionTime": round(execution_time_ms, 1),
             "ToolInvocationCount": 1,
             "event": "tool_execution",
+            **extra_properties,
+        }
+
+        print(json.dumps(emf_log), flush=True)
+
+    def emit_transition_metrics(
+        self,
+        call_id: str,
+        from_node: str,
+        to_node: str,
+        transition_latency_ms: Optional[float] = None,
+        summary_latency_ms: Optional[float] = None,
+        loop_protection: bool = False,
+    ) -> None:
+        """Emit EMF log for agent transition metrics.
+
+        Emitted immediately on each agent-to-agent transition.
+
+        Args:
+            call_id: Unique call identifier
+            from_node: Source agent node
+            to_node: Target agent node
+            transition_latency_ms: Time from transfer call to new node ready (ms)
+            summary_latency_ms: Time to generate context summary (ms)
+            loop_protection: Whether loop protection was activated
+        """
+        metrics_list = [
+            {"Name": "AgentTransitionCount", "Unit": "Count"},
+        ]
+        metric_values: Dict[str, Any] = {
+            "AgentTransitionCount": 1,
+        }
+
+        if transition_latency_ms is not None:
+            metrics_list.append(
+                {"Name": "AgentTransitionLatency", "Unit": "Milliseconds"}
+            )
+            metric_values["AgentTransitionLatency"] = round(transition_latency_ms, 1)
+
+        if summary_latency_ms is not None:
+            metrics_list.append(
+                {"Name": "ContextSummaryLatency", "Unit": "Milliseconds"}
+            )
+            metric_values["ContextSummaryLatency"] = round(summary_latency_ms, 1)
+
+        if loop_protection:
+            metrics_list.append({"Name": "TransitionLoopProtection", "Unit": "Count"})
+            metric_values["TransitionLoopProtection"] = 1
+
+        emf_log = {
+            "_aws": {
+                "Timestamp": int(time.time() * 1000),
+                "CloudWatchMetrics": [
+                    {
+                        "Namespace": self.namespace,
+                        "Dimensions": [
+                            ["Environment"],
+                            ["Environment", "FromNode"],
+                            ["Environment", "ToNode"],
+                        ],
+                        "Metrics": metrics_list,
+                    }
+                ],
+            },
+            "Environment": self.environment,
+            "CallId": call_id,
+            "FromNode": from_node,
+            "ToNode": to_node,
+            "event": "agent_transition",
+            **metric_values,
         }
 
         print(json.dumps(emf_log), flush=True)
@@ -1621,10 +1812,16 @@ class MetricsCollector:
         call_id: str,
         session_id: str,
         environment: Optional[str] = None,
+        poor_audio_threshold_db: float = -70.0,
+        poor_audio_min_confidence: float = 0.9,
     ):
         self.call_id = call_id
         self.session_id = session_id
         self.environment = environment or os.environ.get("ENVIRONMENT", "production")
+
+        # Audio quality thresholds for dual-signal poor audio detection
+        self._poor_audio_threshold_db = poor_audio_threshold_db
+        self._poor_audio_min_confidence = poor_audio_min_confidence
 
         # EMF logger
         self._emf = EMFLogger(environment=self.environment)
@@ -1641,6 +1838,9 @@ class MetricsCollector:
 
         # E2E timing state
         self._vad_stop_time: Optional[float] = None
+
+        # Multi-agent flow state
+        self._agent_node: Optional[str] = None
 
         logger.debug(
             "metrics_collector_created",
@@ -1760,6 +1960,21 @@ class MetricsCollector:
         if self._current_turn:
             self._current_turn.audio_peak_db = peak_db
 
+    def record_audio_rms_distribution(
+        self, min_db: float, max_db: float, stddev_db: float
+    ) -> None:
+        """Record audio RMS distribution stats for current turn.
+
+        Args:
+            min_db: Minimum per-frame RMS in dBFS (quietest frame during speech)
+            max_db: Maximum per-frame RMS in dBFS (loudest frame during speech)
+            stddev_db: Standard deviation of per-frame RMS values in dBFS
+        """
+        if self._current_turn:
+            self._current_turn.audio_rms_min_db = min_db
+            self._current_turn.audio_rms_max_db = max_db
+            self._current_turn.audio_rms_stddev_db = stddev_db
+
     def record_silence_duration(self, duration_ms: float) -> None:
         """Record silence duration before user speech."""
         if self._current_turn:
@@ -1856,12 +2071,96 @@ class MetricsCollector:
         if self._current_turn:
             self._current_turn.quality_score = score
 
+    # -------------------------------------------------------------------------
+    # Multi-Agent Flow Metrics
+    # -------------------------------------------------------------------------
+
+    def set_agent_node(self, node_name: Optional[str]) -> None:
+        """Set the current agent node for dimension tagging.
+
+        Called by the flows integration when the active agent changes.
+        When set, subsequent turn metrics and tool metrics will include
+        an ``AgentNode`` dimension for per-node metric breakdowns.
+
+        Args:
+            node_name: The current agent node name (e.g., "orchestrator",
+                "kb_agent"), or None to clear.
+        """
+        self._agent_node = node_name
+        if self._current_turn:
+            self._current_turn.agent_node = node_name
+
+    @property
+    def agent_node(self) -> Optional[str]:
+        """Current agent node name, or None if not in flows mode."""
+        return self._agent_node
+
+    def record_agent_transition(
+        self,
+        from_node: str,
+        to_node: str,
+        reason: str,
+        transition_latency_ms: Optional[float] = None,
+        summary_latency_ms: Optional[float] = None,
+        loop_protection: bool = False,
+    ) -> None:
+        """Record an agent-to-agent transition.
+
+        Emits EMF metrics immediately (like tool metrics) and updates
+        call-level aggregates.
+
+        Args:
+            from_node: Source agent node name
+            to_node: Target agent node name
+            reason: Reason for the transition
+            transition_latency_ms: Time from transfer call to new node ready
+            summary_latency_ms: Time to generate context summary
+            loop_protection: Whether loop protection was activated
+        """
+        # Update call-level aggregates
+        self._call_metrics.agent_transition_count += 1
+        if transition_latency_ms is not None:
+            self._call_metrics._transition_latencies_ms.append(transition_latency_ms)
+        if summary_latency_ms is not None:
+            self._call_metrics._summary_latencies_ms.append(summary_latency_ms)
+        if loop_protection:
+            self._call_metrics.loop_protection_activations += 1
+
+        # Emit EMF metrics immediately
+        self._emf.emit_transition_metrics(
+            call_id=self.call_id,
+            from_node=from_node,
+            to_node=to_node,
+            transition_latency_ms=transition_latency_ms,
+            summary_latency_ms=summary_latency_ms,
+            loop_protection=loop_protection,
+        )
+
+        # Structured log
+        logger.info(
+            "agent_transition",
+            call_id=self.call_id,
+            session_id=self.session_id,
+            from_node=from_node,
+            to_node=to_node,
+            reason=reason,
+            transition_latency_ms=(
+                round(transition_latency_ms, 1) if transition_latency_ms else None
+            ),
+            summary_latency_ms=(
+                round(summary_latency_ms, 1) if summary_latency_ms else None
+            ),
+            transition_number=self._call_metrics.agent_transition_count,
+            loop_protection=loop_protection,
+        )
+
     def record_tool_execution(
         self,
         tool_name: str,
         category: str,
         status: str,
         execution_time_ms: float,
+        result_summary: Optional[str] = None,
     ) -> None:
         """
         Record tool execution metrics.
@@ -1871,6 +2170,7 @@ class MetricsCollector:
             category: Tool category (customer_info, system, etc.)
             status: Execution status (success, error, timeout, cancelled)
             execution_time_ms: Execution duration in milliseconds
+            result_summary: Optional truncated summary of tool result content
         """
         # Emit EMF metrics immediately
         self._emf.emit_tool_metrics(
@@ -1879,19 +2179,24 @@ class MetricsCollector:
             category=category,
             status=status,
             execution_time_ms=execution_time_ms,
+            agent_node=self._agent_node,
         )
 
         # Log for structured logging
-        logger.info(
-            "tool_execution",
-            call_id=self.call_id,
-            session_id=self.session_id,
-            turn_number=self.turn_count,
-            tool_name=tool_name,
-            category=category,
-            status=status,
-            execution_time_ms=round(execution_time_ms, 1),
-        )
+        log_kwargs: Dict[str, Any] = {
+            "call_id": self.call_id,
+            "session_id": self.session_id,
+            "turn_number": self.turn_count,
+            "tool_name": tool_name,
+            "category": category,
+            "status": status,
+            "execution_time_ms": round(execution_time_ms, 1),
+        }
+        if self._agent_node:
+            log_kwargs["agent_node"] = self._agent_node
+        if result_summary is not None:
+            log_kwargs["result_summary"] = result_summary
+        logger.info("tool_execution", **log_kwargs)
 
     def mark_vad_stop(self) -> None:
         """Mark VAD stop time for E2E latency calculation."""
@@ -1935,6 +2240,7 @@ class MetricsCollector:
         self._call_metrics.turn_count += 1
         self._current_turn = TurnMetrics(
             turn_number=self._call_metrics.turn_count,
+            agent_node=self._agent_node,
         )
         logger.debug(
             "turn_started",
@@ -1960,6 +2266,33 @@ class MetricsCollector:
         # Store conversation content
         self._current_turn.user_text = user_text
         self._current_turn.assistant_text = assistant_text
+
+        # Dual-signal poor audio detection
+        # At this point all observers have written their data:
+        # - audio_rms_db was set by AudioQualityObserver on UserStoppedSpeakingFrame
+        # - stt_confidence_avg was set by STTQualityObserver on TranscriptionFrame
+        # A turn is flagged as poor audio only when:
+        #   1. RMS is below threshold (audio is objectively quiet), AND
+        #   2. STT confidence is low or absent (transcription was impacted)
+        # This avoids false positives where audio is quiet but perfectly clear.
+        if self._current_turn.audio_rms_db is not None:
+            rms_below_threshold = (
+                self._current_turn.audio_rms_db < self._poor_audio_threshold_db
+            )
+            stt_ok = (
+                self._current_turn.stt_confidence_avg is not None
+                and self._current_turn.stt_confidence_avg
+                >= self._poor_audio_min_confidence
+            )
+            if rms_below_threshold and not stt_ok:
+                self._call_metrics.poor_audio_turns += 1
+                logger.debug(
+                    "poor_audio_detected",
+                    avg_rms_db=round(self._current_turn.audio_rms_db, 1),
+                    stt_confidence_avg=self._current_turn.stt_confidence_avg,
+                    turn_number=self._current_turn.turn_number,
+                    call_id=self.call_id,
+                )
 
         # Add to history
         self._call_metrics._turn_metrics.append(self._current_turn)
@@ -2043,6 +2376,7 @@ def create_metrics_collector(
     call_id: str,
     session_id: str,
     environment: Optional[str] = None,
+    poor_audio_threshold_db: float = -70.0,
 ) -> MetricsCollector:
     """
     Factory function to create a MetricsCollector.
@@ -2051,6 +2385,9 @@ def create_metrics_collector(
         call_id: Unique call identifier
         session_id: Session identifier
         environment: Environment name (defaults to ENVIRONMENT env var)
+        poor_audio_threshold_db: Threshold in dBFS below which audio may be
+            flagged as poor quality (used by dual-signal detection in end_turn).
+            Defaults to -70.0, calibrated for PSTN/SIP dial-in.
 
     Returns:
         Configured MetricsCollector instance
@@ -2059,4 +2396,5 @@ def create_metrics_collector(
         call_id=call_id,
         session_id=session_id,
         environment=environment,
+        poor_audio_threshold_db=poor_audio_threshold_db,
     )

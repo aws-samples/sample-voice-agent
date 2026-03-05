@@ -74,16 +74,18 @@ This step **must happen before** CDK destroy, because the Daily API key is store
 cd infrastructure && ./deploy.sh destroy
 ```
 
-This runs `npx cdk destroy --all --force` and removes all 10 CDK stacks:
+This runs `npx cdk destroy --all --force` and removes all CDK stacks:
 - VoiceAgentNetwork (VPC, NAT, security groups)
 - VoiceAgentStorage (Secrets Manager, KMS)
-- VoiceAgentSageMaker (GPU endpoints, if deployed)
+- VoiceAgentSageMaker (GPU endpoints if SageMaker mode, or SSM stub if cloud API mode)
 - VoiceAgentKnowledgeBase (Bedrock KB, S3 bucket)
 - VoiceAgentEcs (Fargate cluster, NLB, CloudWatch dashboard)
 - VoiceAgentBotRunner (Lambda, API Gateway)
-- VoiceAgentCRM (DynamoDB tables)
+- VoiceAgentCRM (DynamoDB tables, API Lambda)
 - VoiceAgentKbAgent (KB capability agent)
 - VoiceAgentCrmAgent (CRM capability agent)
+- VoiceAgentAppointment (DynamoDB table, API Lambda)
+- VoiceAgentAppointmentAgent (Appointment capability agent)
 
 Wait for the destroy to complete. This typically takes 5-10 minutes. SageMaker endpoints may take longer.
 

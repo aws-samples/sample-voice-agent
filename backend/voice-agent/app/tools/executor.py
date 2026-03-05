@@ -19,6 +19,7 @@ from .result import (
     error_result,
     timeout_result,
 )
+from .result_summarizer import is_result_logging_enabled, summarize_tool_result
 
 if TYPE_CHECKING:
     from ..observability import MetricsCollector
@@ -115,21 +116,43 @@ class ToolExecutor:
             execution_time_ms = (time.perf_counter() - start_time) * 1000
             result.execution_time_ms = execution_time_ms
 
-            # Record metrics
+            # Compute result summary when feature is enabled
+            result_summary = None
+            if result.is_success() and is_result_logging_enabled():
+                try:
+                    result_summary = summarize_tool_result(
+                        result.content, tool_name=tool_name
+                    )
+                except Exception:
+                    pass  # Never let summarization affect tool execution
+
+            # Record metrics (includes result_summary in structured log)
             self._record_metrics(
                 tool_name=tool_name,
                 category=tool.category.value,
                 status=result.status.value,
                 execution_time_ms=execution_time_ms,
+                result_summary=result_summary,
             )
 
-            logger.info(
-                "tool_execution_complete",
-                tool_name=tool_name,
-                status=result.status.value,
-                execution_time_ms=round(execution_time_ms, 1),
-                call_id=context.call_id,
-            )
+            log_kwargs = {
+                "tool_name": tool_name,
+                "status": result.status.value,
+                "execution_time_ms": round(execution_time_ms, 1),
+                "call_id": context.call_id,
+            }
+            if result_summary is not None:
+                log_kwargs["result_summary"] = result_summary
+
+            logger.info("tool_execution_complete", **log_kwargs)
+
+            if result_summary is not None and result.content is not None:
+                logger.debug(
+                    "tool_result_detail",
+                    tool_name=tool_name,
+                    call_id=context.call_id,
+                    result_content=result.content,
+                )
 
             return result
 
@@ -206,6 +229,7 @@ class ToolExecutor:
         category: str,
         status: str,
         execution_time_ms: float,
+        result_summary: Optional[str] = None,
     ) -> None:
         """Record tool execution metrics.
 
@@ -214,6 +238,7 @@ class ToolExecutor:
             category: Tool category
             status: Execution status
             execution_time_ms: Execution duration
+            result_summary: Optional truncated summary of tool result
         """
         if self.metrics_collector is not None:
             try:
@@ -222,6 +247,7 @@ class ToolExecutor:
                     category=category,
                     status=status,
                     execution_time_ms=execution_time_ms,
+                    result_summary=result_summary,
                 )
             except Exception as e:
                 # Don't let metrics failures affect tool execution

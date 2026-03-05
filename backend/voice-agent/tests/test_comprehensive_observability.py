@@ -447,7 +447,7 @@ class TestQualityScoreCalculator:
         turn = TurnMetrics(
             turn_number=1,
             agent_response_latency_ms=3000,  # Poor
-            audio_rms_db=-60,  # Poor
+            audio_rms_db=-75,  # Poor (below -70 threshold)
             stt_confidence_avg=0.5,  # Poor
             turn_gap_ms=3000,  # Poor
             webrtc_rtt_ms=300,  # Poor
@@ -489,11 +489,29 @@ class TestQualityScoreCalculator:
         """Test audio quality scoring function."""
         # Excellent audio
         assert QualityScoreCalculator._score_audio_quality(-25) == 1.0
-        # Poor audio
-        assert QualityScoreCalculator._score_audio_quality(-60) == 0.0
-        # Medium audio
-        score = QualityScoreCalculator._score_audio_quality(-42.5)
+        # Poor audio (below -70 threshold)
+        assert QualityScoreCalculator._score_audio_quality(-75) == 0.0
+        # Medium audio (between -30 excellent and -70 poor)
+        score = QualityScoreCalculator._score_audio_quality(-50)
         assert 0.0 < score < 1.0
+
+    def test_configure_updates_threshold(self):
+        """Test that configure() updates the poor audio threshold."""
+        original = QualityScoreCalculator.THRESHOLDS["poor_audio_db"]
+        try:
+            # Configure a stricter threshold
+            QualityScoreCalculator.configure(-55.0)
+            assert QualityScoreCalculator.THRESHOLDS["poor_audio_db"] == -55.0
+
+            # Audio at -60 dB should now score 0.0 (below -55 threshold)
+            assert QualityScoreCalculator._score_audio_quality(-60) == 0.0
+
+            # Audio at -50 dB should score > 0.0 (above -55 threshold)
+            score = QualityScoreCalculator._score_audio_quality(-50)
+            assert score > 0.0
+        finally:
+            # Restore original threshold for other tests
+            QualityScoreCalculator.configure(original)
 
     def test_stt_confidence_scoring(self):
         """Test STT confidence scoring function."""

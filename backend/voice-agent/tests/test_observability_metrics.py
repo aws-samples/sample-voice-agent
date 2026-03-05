@@ -17,6 +17,7 @@ try:
         TranscriptionFrame,
         BotStartedSpeakingFrame,
         BotStoppedSpeakingFrame,
+        TTSSpeakFrame,
         TTSStartedFrame,
         TTSStoppedFrame,
         UserStartedSpeakingFrame,
@@ -693,6 +694,18 @@ class TestCreateMetricsCollector:
         collector = create_metrics_collector("call-1", "session-1", "custom")
         assert collector.environment == "custom"
 
+    def test_passes_poor_audio_threshold(self):
+        """Test factory passes poor_audio_threshold_db to MetricsCollector."""
+        collector = create_metrics_collector(
+            "call-1", "session-1", poor_audio_threshold_db=-55.0
+        )
+        assert collector._poor_audio_threshold_db == -55.0
+
+    def test_default_poor_audio_threshold(self):
+        """Test factory defaults poor_audio_threshold_db to -70.0."""
+        collector = create_metrics_collector("call-1", "session-1")
+        assert collector._poor_audio_threshold_db == -70.0
+
 
 class TestConversationObserver:
     """Tests for ConversationObserver."""
@@ -1113,6 +1126,137 @@ class TestConversationObserver:
         # Should have both LLM texts, not the non-LLM ones
         assert observer._current_bot_text == ["Hello ", "world!"]
 
+    # ---- TTSSpeakFrame (transition/filler/spoken_response TTS) ----
+
+    @pytest.mark.asyncio
+    async def test_logs_tts_speak_frame_as_system(self, capsys):
+        """Test that TTSSpeakFrame from non-LLM source logs as speaker=system."""
+        collector = MetricsCollector("call-1", "session-1", "test")
+        collector.start_turn()
+        observer = ConversationObserver(collector, enabled=True)
+
+        frame = TTSSpeakFrame(text="One moment please.")
+        await observer.on_push_frame(self._make_frame_pushed(frame, from_llm=False))
+
+        captured = capsys.readouterr()
+        assert "conversation_turn" in captured.out
+        assert "speaker=system" in captured.out or '"speaker": "system"' in captured.out
+        assert "One moment please." in captured.out
+
+    @pytest.mark.asyncio
+    async def test_tts_speak_frame_from_llm_not_logged(self, capsys):
+        """Test that TTSSpeakFrame from LLMService is skipped (avoids double-logging)."""
+        collector = MetricsCollector("call-1", "session-1", "test")
+        collector.start_turn()
+        observer = ConversationObserver(collector, enabled=True)
+
+        frame = TTSSpeakFrame(text="LLM-generated speech")
+        await observer.on_push_frame(self._make_frame_pushed(frame, from_llm=True))
+
+        captured = capsys.readouterr()
+        assert "conversation_turn" not in captured.out
+
+    @pytest.mark.asyncio
+    async def test_tts_speak_frame_dedup(self, capsys):
+        """Test that duplicate TTSSpeakFrame is logged only once."""
+        collector = MetricsCollector("call-1", "session-1", "test")
+        collector.start_turn()
+        observer = ConversationObserver(collector, enabled=True)
+
+        frame = TTSSpeakFrame(text="One moment please.")
+        await observer.on_push_frame(self._make_frame_pushed(frame, from_llm=False))
+        # Push same frame again (simulates multi-hop in pipeline)
+        await observer.on_push_frame(self._make_frame_pushed(frame, from_llm=False))
+
+        captured = capsys.readouterr()
+        # Should appear exactly once
+        assert captured.out.count("One moment please.") == 1
+
+    @pytest.mark.asyncio
+    async def test_tts_speak_frame_empty_text_skipped(self, capsys):
+        """Test that TTSSpeakFrame with empty/whitespace text is not logged."""
+        collector = MetricsCollector("call-1", "session-1", "test")
+        collector.start_turn()
+        observer = ConversationObserver(collector, enabled=True)
+
+        for text in ["", "   ", None]:
+            frame = TTSSpeakFrame(text=text)
+            await observer.on_push_frame(self._make_frame_pushed(frame, from_llm=False))
+
+        captured = capsys.readouterr()
+        assert "conversation_turn" not in captured.out
+
+    @pytest.mark.asyncio
+    async def test_tts_speak_frame_does_not_affect_assistant_logging(self, capsys):
+        """Test that LLM-generated speech still logs as assistant after TTSSpeakFrame."""
+        collector = MetricsCollector("call-1", "session-1", "test")
+        collector.start_turn()
+        observer = ConversationObserver(collector, enabled=True)
+
+        # System TTS first (transition phrase)
+        system_frame = TTSSpeakFrame(text="One moment please.")
+        await observer.on_push_frame(
+            self._make_frame_pushed(system_frame, from_llm=False)
+        )
+
+        # Then LLM response
+        await observer.on_push_frame(
+            self._make_frame_pushed(LLMFullResponseStartFrame(), from_llm=True)
+        )
+        await observer.on_push_frame(
+            self._make_frame_pushed(TextFrame(text="How can I help?"), from_llm=True)
+        )
+        await observer.on_push_frame(
+            self._make_frame_pushed(LLMFullResponseEndFrame(), from_llm=True)
+        )
+
+        captured = capsys.readouterr()
+        # Both should be present
+        assert "One moment please." in captured.out
+        assert "How can I help?" in captured.out
+        # System and assistant speakers both present
+        assert "speaker=system" in captured.out or '"speaker": "system"' in captured.out
+        assert (
+            "speaker=assistant" in captured.out
+            or '"speaker": "assistant"' in captured.out
+        )
+
+    @pytest.mark.asyncio
+    async def test_conversation_turn_includes_agent_node(self, capsys):
+        """conversation_turn log should include agent_node when set on collector."""
+        collector = MetricsCollector("call-1", "session-1", "test")
+        collector.start_turn()
+        collector.set_agent_node("kb_agent")
+        observer = ConversationObserver(collector, enabled=True)
+
+        frame = TranscriptionFrame(
+            text="What is the return policy?", user_id="user-1", timestamp="2024-01-01"
+        )
+        await observer.on_push_frame(self._make_frame_pushed(frame))
+
+        captured = capsys.readouterr()
+        assert "conversation_turn" in captured.out
+        assert (
+            "agent_node=kb_agent" in captured.out
+            or '"agent_node": "kb_agent"' in captured.out
+        )
+
+    @pytest.mark.asyncio
+    async def test_conversation_turn_omits_agent_node_when_none(self, capsys):
+        """conversation_turn log should omit agent_node in single-agent mode."""
+        collector = MetricsCollector("call-1", "session-1", "test")
+        collector.start_turn()
+        observer = ConversationObserver(collector, enabled=True)
+
+        frame = TranscriptionFrame(
+            text="Hello!", user_id="user-1", timestamp="2024-01-01"
+        )
+        await observer.on_push_frame(self._make_frame_pushed(frame))
+
+        captured = capsys.readouterr()
+        assert "conversation_turn" in captured.out
+        assert "agent_node" not in captured.out
+
 
 # =============================================================================
 # AudioQualityObserver Tests
@@ -1320,7 +1464,12 @@ class TestAudioQualityObserver:
 
     @pytest.mark.asyncio
     async def test_poor_audio_turn_recorded(self):
-        """Test that poor audio quality is tracked."""
+        """Test that poor audio quality is tracked via dual-signal detection in end_turn().
+
+        Dual-signal detection flags a turn as poor audio when BOTH:
+        1. RMS is below threshold (-70 dBFS default), AND
+        2. STT confidence is low or absent (None or < 0.9)
+        """
         from app.observability import AudioQualityObserver
         from pipecat.frames.frames import (
             UserStartedSpeakingFrame,
@@ -1336,9 +1485,9 @@ class TestAudioQualityObserver:
             self._make_frame_pushed(UserStartedSpeakingFrame())
         )
 
-        # Send very quiet audio (below poor audio threshold of -55 dBFS)
-        # These samples (~-64 dBFS) should trigger poor audio detection
-        frame = self._make_audio_frame([10, 20, 30, -10, -20])
+        # Send very quiet audio (below poor audio threshold of -70 dBFS)
+        # These samples (~-76 dBFS) should trigger poor audio detection
+        frame = self._make_audio_frame([3, 5, 7, -3, -5])
         await observer.on_push_frame(self._make_frame_pushed(frame))
         await observer.on_push_frame(self._make_frame_pushed(frame))
 
@@ -1346,12 +1495,18 @@ class TestAudioQualityObserver:
             self._make_frame_pushed(UserStoppedSpeakingFrame())
         )
 
-        # Check that poor audio turn was recorded
+        # Poor audio detection happens in end_turn() (dual-signal).
+        # No STT confidence recorded => stt_confidence_avg is None => not "stt_ok" => flagged.
+        collector.end_turn()
         assert collector.call_metrics.poor_audio_turns == 1
 
     @pytest.mark.asyncio
     async def test_poor_audio_counted_once_per_turn(self):
-        """Test that poor audio is only counted once per conversation turn, not per VAD event."""
+        """Test that poor audio is only counted once per conversation turn, not per VAD event.
+
+        Multiple VAD start/stop events can fire within a single conversation turn.
+        Poor audio detection happens in end_turn(), so it counts exactly once per turn.
+        """
         from app.observability import AudioQualityObserver
         from pipecat.frames.frames import (
             UserStartedSpeakingFrame,
@@ -1362,8 +1517,8 @@ class TestAudioQualityObserver:
         collector.start_turn()
         observer = AudioQualityObserver(collector, enabled=True)
 
-        # Very quiet audio that will trigger poor audio detection
-        quiet_frame = self._make_audio_frame([10, 20, 30, -10, -20])
+        # Very quiet audio that will trigger poor audio detection (~-76 dBFS)
+        quiet_frame = self._make_audio_frame([3, 5, 7, -3, -5])
 
         # Simulate multiple VAD events within the same conversation turn
         # (VAD can fire start/stop multiple times during a single user utterance)
@@ -1376,7 +1531,8 @@ class TestAudioQualityObserver:
                 self._make_frame_pushed(UserStoppedSpeakingFrame())
             )
 
-        # Poor audio should only be counted ONCE, not 5 times
+        # Poor audio is evaluated once in end_turn(), not per VAD event
+        collector.end_turn()
         assert collector.call_metrics.poor_audio_turns == 1
 
     @pytest.mark.asyncio
@@ -1398,7 +1554,7 @@ class TestAudioQualityObserver:
             self._make_frame_pushed(UserStartedSpeakingFrame())
         )
         await observer.on_push_frame(
-            self._make_frame_pushed(self._make_audio_frame([10, 20, 30, -10, -20]))
+            self._make_frame_pushed(self._make_audio_frame([3, 5, 7, -3, -5]))
         )
         await observer.on_push_frame(
             self._make_frame_pushed(UserStoppedSpeakingFrame())
@@ -1411,7 +1567,7 @@ class TestAudioQualityObserver:
             self._make_frame_pushed(UserStartedSpeakingFrame())
         )
         await observer.on_push_frame(
-            self._make_frame_pushed(self._make_audio_frame([10, 20, 30, -10, -20]))
+            self._make_frame_pushed(self._make_audio_frame([3, 5, 7, -3, -5]))
         )
         await observer.on_push_frame(
             self._make_frame_pushed(UserStoppedSpeakingFrame())
@@ -1434,7 +1590,7 @@ class TestAudioQualityObserver:
         collector.start_turn()
         observer = AudioQualityObserver(collector, enabled=True)
 
-        # Normal phone audio (~-40 dBFS, which is above the -55 dBFS threshold)
+        # Normal phone audio (~-20 dBFS, which is well above the -70 dBFS threshold)
         # Amplitude of ~3000 gives roughly -20 dB
         normal_frame = self._make_audio_frame([3000, 4000, 5000, -3000, -4000])
 
@@ -1504,6 +1660,370 @@ class TestAudioQualityObserver:
         assert turn is not None
         assert turn.audio_peak_db is not None
         assert turn.audio_peak_db > -1.0  # Very close to full scale
+
+    @pytest.mark.asyncio
+    async def test_custom_threshold_overrides_default(self):
+        """Test that a custom poor audio threshold overrides the default.
+
+        The threshold is used by both the observer (for logging) and
+        MetricsCollector.end_turn() (for dual-signal poor audio detection).
+        """
+        from app.observability import AudioQualityObserver
+        from pipecat.frames.frames import (
+            UserStartedSpeakingFrame,
+            UserStoppedSpeakingFrame,
+        )
+
+        # Pass the stricter threshold to MetricsCollector for dual-signal detection
+        collector = MetricsCollector(
+            "call-1", "session-1", "test", poor_audio_threshold_db=-55.0
+        )
+        collector.start_turn()
+        # Use a stricter threshold (-55 dBFS) that flags more audio as poor
+        observer = AudioQualityObserver(
+            collector, enabled=True, poor_audio_threshold_db=-55.0
+        )
+
+        await observer.on_push_frame(
+            self._make_frame_pushed(UserStartedSpeakingFrame())
+        )
+
+        # Audio at ~-64 dBFS: below -55 threshold, so should be flagged as poor
+        frame = self._make_audio_frame([10, 20, 30, -10, -20])
+        await observer.on_push_frame(self._make_frame_pushed(frame))
+
+        await observer.on_push_frame(
+            self._make_frame_pushed(UserStoppedSpeakingFrame())
+        )
+
+        # No STT confidence => dual-signal flags as poor
+        collector.end_turn()
+        assert collector.call_metrics.poor_audio_turns == 1
+
+    @pytest.mark.asyncio
+    async def test_pstn_audio_not_flagged_with_default_threshold(self):
+        """Test that normal PSTN audio (-62 to -68 dBFS) is not flagged with default -70 threshold."""
+        from app.observability import AudioQualityObserver
+        from pipecat.frames.frames import (
+            UserStartedSpeakingFrame,
+            UserStoppedSpeakingFrame,
+        )
+
+        collector = MetricsCollector("call-1", "session-1", "test")
+        collector.start_turn()
+        # Default threshold is -70 dBFS
+        observer = AudioQualityObserver(collector, enabled=True)
+
+        await observer.on_push_frame(
+            self._make_frame_pushed(UserStartedSpeakingFrame())
+        )
+
+        # Typical PSTN audio (~-64 dBFS) -- above the -70 threshold
+        frame = self._make_audio_frame([10, 20, 30, -10, -20])
+        await observer.on_push_frame(self._make_frame_pushed(frame))
+
+        await observer.on_push_frame(
+            self._make_frame_pushed(UserStoppedSpeakingFrame())
+        )
+
+        # Should NOT be flagged as poor audio
+        assert collector.call_metrics.poor_audio_turns == 0
+
+    @pytest.mark.asyncio
+    async def test_default_threshold_is_negative_70(self):
+        """Test that the default poor audio threshold is -70 dBFS."""
+        from app.observability import AudioQualityObserver
+
+        collector = MetricsCollector("call-1", "session-1", "test")
+        observer = AudioQualityObserver(collector, enabled=True)
+
+        assert observer._poor_audio_threshold_db == -70.0
+        assert observer.DEFAULT_POOR_AUDIO_THRESHOLD_DB == -70.0
+
+    @pytest.mark.asyncio
+    async def test_rms_distribution_metrics_recorded(self):
+        """Test that min, max, and stddev of per-frame RMS are recorded on the turn."""
+        from app.observability import AudioQualityObserver
+        from pipecat.frames.frames import (
+            InputAudioRawFrame,
+            UserStartedSpeakingFrame,
+            UserStoppedSpeakingFrame,
+        )
+
+        collector = MetricsCollector("call-1", "session-1", "test")
+        collector.start_turn()
+        observer = AudioQualityObserver(collector, enabled=True)
+
+        await observer.on_push_frame(
+            self._make_frame_pushed(UserStartedSpeakingFrame())
+        )
+
+        # Send two frames with very different amplitudes to create a measurable spread.
+        # Frame 1: loud audio (~-20 dBFS) -- amplitude ~3000
+        loud_frame = self._make_audio_frame([3000, 4000, 5000, -3000, -4000])
+        await observer.on_push_frame(self._make_frame_pushed(loud_frame))
+
+        # Frame 2: quiet audio (~-64 dBFS) -- amplitude ~20
+        quiet_frame = self._make_audio_frame([10, 20, 30, -10, -20])
+        await observer.on_push_frame(self._make_frame_pushed(quiet_frame))
+
+        await observer.on_push_frame(
+            self._make_frame_pushed(UserStoppedSpeakingFrame())
+        )
+
+        turn = collector.current_turn
+        assert turn is not None
+
+        # avg should be set (existing behavior)
+        assert turn.audio_rms_db is not None
+
+        # Distribution stats should be set
+        assert turn.audio_rms_min_db is not None
+        assert turn.audio_rms_max_db is not None
+        assert turn.audio_rms_stddev_db is not None
+
+        # min should be the quiet frame, max should be the loud frame
+        assert turn.audio_rms_min_db < turn.audio_rms_db
+        assert turn.audio_rms_max_db > turn.audio_rms_db
+
+        # stddev should be > 0 since frames have different levels
+        assert turn.audio_rms_stddev_db > 0.0
+
+        # Verify they appear in to_dict() for structured logging
+        d = turn.to_dict()
+        assert "audio_rms_min_db" in d
+        assert "audio_rms_max_db" in d
+        assert "audio_rms_stddev_db" in d
+
+    @pytest.mark.asyncio
+    async def test_rms_distribution_single_frame(self):
+        """Test that stddev is 0 when only one audio frame is captured."""
+        from app.observability import AudioQualityObserver
+        from pipecat.frames.frames import (
+            UserStartedSpeakingFrame,
+            UserStoppedSpeakingFrame,
+        )
+
+        collector = MetricsCollector("call-1", "session-1", "test")
+        collector.start_turn()
+        observer = AudioQualityObserver(collector, enabled=True)
+
+        await observer.on_push_frame(
+            self._make_frame_pushed(UserStartedSpeakingFrame())
+        )
+
+        # Single frame only
+        frame = self._make_audio_frame([3000, 4000, 5000, -3000, -4000])
+        await observer.on_push_frame(self._make_frame_pushed(frame))
+
+        await observer.on_push_frame(
+            self._make_frame_pushed(UserStoppedSpeakingFrame())
+        )
+
+        turn = collector.current_turn
+        assert turn is not None
+        assert turn.audio_rms_min_db is not None
+        assert turn.audio_rms_max_db is not None
+        assert turn.audio_rms_stddev_db == 0.0
+        # With single frame, min == max == avg
+        assert turn.audio_rms_min_db == turn.audio_rms_max_db == turn.audio_rms_db
+
+
+# =============================================================================
+# Dual-Signal Poor Audio Detection Tests
+# =============================================================================
+
+
+class TestDualSignalPoorAudioDetection:
+    """Tests for dual-signal poor audio detection in MetricsCollector.end_turn().
+
+    Dual-signal detection flags a turn as poor audio only when BOTH conditions are met:
+    1. Audio RMS is below the configured threshold (default -70 dBFS)
+    2. STT confidence is absent (None) or below the minimum threshold (default 0.9)
+
+    This prevents false positives where audio is quiet but Deepgram still
+    transcribes perfectly (e.g., PSTN audio at -62 to -75 dBFS).
+    """
+
+    def test_low_rms_low_stt_confidence_is_poor(self):
+        """Low RMS + low STT confidence = poor audio (both signals agree)."""
+        collector = MetricsCollector("call-1", "session-1", "test")
+        collector.start_turn()
+
+        # Set low RMS (below -70 threshold)
+        collector.record_audio_rms(-80.0)
+        # Set low STT confidence (below 0.9)
+        collector.record_stt_quality(
+            confidence_avg=0.5,
+            confidence_min=0.3,
+            interim_count=2,
+            final_count=1,
+            word_count=3,
+        )
+
+        collector.end_turn()
+        assert collector.call_metrics.poor_audio_turns == 1
+
+    def test_low_rms_no_stt_confidence_is_poor(self):
+        """Low RMS + absent STT confidence (None) = poor audio (true silence)."""
+        collector = MetricsCollector("call-1", "session-1", "test")
+        collector.start_turn()
+
+        # Set low RMS (below -70 threshold)
+        collector.record_audio_rms(-88.0)
+        # No STT confidence recorded (stt_confidence_avg stays None)
+
+        collector.end_turn()
+        assert collector.call_metrics.poor_audio_turns == 1
+
+    def test_low_rms_high_stt_confidence_not_poor(self):
+        """Low RMS + high STT confidence = NOT poor audio.
+
+        This is the key false-positive scenario: audio is quiet on the wire
+        but Deepgram transcribes perfectly. Real call data shows STT confidence
+        of 0.997-0.999 even at -88 dBFS on PSTN.
+        """
+        collector = MetricsCollector("call-1", "session-1", "test")
+        collector.start_turn()
+
+        # Set low RMS (below -70 threshold)
+        collector.record_audio_rms(-75.0)
+        # Set high STT confidence (Deepgram transcribed fine)
+        collector.record_stt_quality(
+            confidence_avg=0.997,
+            confidence_min=0.99,
+            interim_count=3,
+            final_count=1,
+            word_count=5,
+        )
+
+        collector.end_turn()
+        assert collector.call_metrics.poor_audio_turns == 0
+
+    def test_normal_rms_low_stt_confidence_not_poor(self):
+        """Normal RMS + low STT confidence = NOT poor audio (RMS is fine)."""
+        collector = MetricsCollector("call-1", "session-1", "test")
+        collector.start_turn()
+
+        # Set normal RMS (above -70 threshold)
+        collector.record_audio_rms(-40.0)
+        # Set low STT confidence (rare: loud but garbled?)
+        collector.record_stt_quality(
+            confidence_avg=0.5,
+            confidence_min=0.3,
+            interim_count=2,
+            final_count=1,
+            word_count=3,
+        )
+
+        collector.end_turn()
+        # RMS above threshold means it's not "poor audio" regardless of STT
+        assert collector.call_metrics.poor_audio_turns == 0
+
+    def test_normal_rms_no_stt_not_poor(self):
+        """Normal RMS + no STT confidence = NOT poor audio."""
+        collector = MetricsCollector("call-1", "session-1", "test")
+        collector.start_turn()
+
+        # Set normal RMS (above threshold)
+        collector.record_audio_rms(-50.0)
+        # No STT confidence
+
+        collector.end_turn()
+        assert collector.call_metrics.poor_audio_turns == 0
+
+    def test_no_rms_data_not_poor(self):
+        """No audio RMS recorded at all = NOT poor audio (no data to judge)."""
+        collector = MetricsCollector("call-1", "session-1", "test")
+        collector.start_turn()
+        # Don't record any audio metrics
+
+        collector.end_turn()
+        assert collector.call_metrics.poor_audio_turns == 0
+
+    def test_silence_minus_96_no_stt_is_poor(self):
+        """True silence (-96 dBFS) with no STT = poor audio (dead air)."""
+        collector = MetricsCollector("call-1", "session-1", "test")
+        collector.start_turn()
+
+        collector.record_audio_rms(-96.0)
+        # No STT at all (dead silence, VAD fired but nothing transcribed)
+
+        collector.end_turn()
+        assert collector.call_metrics.poor_audio_turns == 1
+
+    def test_stt_confidence_exactly_at_threshold_not_poor(self):
+        """STT confidence exactly at 0.9 threshold = considered OK (not poor)."""
+        collector = MetricsCollector("call-1", "session-1", "test")
+        collector.start_turn()
+
+        collector.record_audio_rms(-75.0)  # Below RMS threshold
+        collector.record_stt_quality(
+            confidence_avg=0.9,
+            confidence_min=0.9,
+            interim_count=1,
+            final_count=1,
+            word_count=2,
+        )
+
+        collector.end_turn()
+        # stt_confidence_avg >= 0.9, so stt_ok is True => not flagged
+        assert collector.call_metrics.poor_audio_turns == 0
+
+    def test_custom_threshold_used_by_collector(self):
+        """MetricsCollector uses its own poor_audio_threshold_db, not the observer's."""
+        collector = MetricsCollector(
+            "call-1", "session-1", "test", poor_audio_threshold_db=-55.0
+        )
+        collector.start_turn()
+
+        # RMS at -60 dBFS: below -55 threshold
+        collector.record_audio_rms(-60.0)
+        # No STT confidence => flagged
+
+        collector.end_turn()
+        assert collector.call_metrics.poor_audio_turns == 1
+
+    def test_dual_signal_across_multiple_turns(self, capsys):
+        """Dual-signal detection counts poor turns correctly across multiple turns."""
+        collector = MetricsCollector("call-1", "session-1", "test")
+
+        # Turn 1: Low RMS + no STT => poor
+        collector.start_turn()
+        collector.record_audio_rms(-80.0)
+        collector.end_turn()
+
+        # Turn 2: Low RMS + high STT => NOT poor (false positive avoided)
+        collector.start_turn()
+        collector.record_audio_rms(-75.0)
+        collector.record_stt_quality(
+            confidence_avg=0.998,
+            confidence_min=0.995,
+            interim_count=2,
+            final_count=1,
+            word_count=4,
+        )
+        collector.end_turn()
+
+        # Turn 3: Normal RMS => NOT poor
+        collector.start_turn()
+        collector.record_audio_rms(-40.0)
+        collector.end_turn()
+
+        # Turn 4: Low RMS + low STT => poor
+        collector.start_turn()
+        collector.record_audio_rms(-82.0)
+        collector.record_stt_quality(
+            confidence_avg=0.4,
+            confidence_min=0.2,
+            interim_count=1,
+            final_count=1,
+            word_count=1,
+        )
+        collector.end_turn()
+
+        # Only turns 1 and 4 should be flagged
+        assert collector.call_metrics.poor_audio_turns == 2
 
 
 # =============================================================================
@@ -1593,6 +2113,20 @@ class TestAudioQualityMetrics:
         assert result["audio_rms_db"] == -25.5
         assert result["audio_peak_db"] == -12.3
         assert result["silence_duration_ms"] == 350.0
+
+    def test_turn_metrics_to_dict_includes_rms_distribution(self):
+        """Test TurnMetrics to_dict includes RMS distribution fields."""
+        turn = TurnMetrics(
+            turn_number=1,
+            audio_rms_db=-50.0,
+            audio_rms_min_db=-72.5,
+            audio_rms_max_db=-25.0,
+            audio_rms_stddev_db=15.3,
+        )
+        result = turn.to_dict()
+        assert result["audio_rms_min_db"] == -72.5
+        assert result["audio_rms_max_db"] == -25.0
+        assert result["audio_rms_stddev_db"] == 15.3
 
 
 # =============================================================================

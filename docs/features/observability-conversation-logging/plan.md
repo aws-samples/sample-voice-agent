@@ -62,11 +62,16 @@ Add conversation content logging to the voice pipeline using pipecat's observer 
   "call_id": "uuid",
   "session_id": "uuid",
   "turn_number": 1,
-  "speaker": "user|assistant",
+  "speaker": "user|assistant|system",
   "content": "transcribed or generated text",
   "timestamp": "ISO-8601"
 }
 ```
+
+Speaker values:
+- `"user"` -- caller's transcribed speech (from STT)
+- `"assistant"` -- LLM-generated bot response
+- `"system"` -- non-LLM TTS: transition phrases, filler phrases, tool spoken responses
 
 ## Testing Strategy
 

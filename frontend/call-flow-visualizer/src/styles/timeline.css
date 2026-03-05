@@ -15,6 +15,7 @@
   --badge-red: #ef4444;
   --badge-darkgray: #4b5563;
   --badge-yellow: #ca8a04;
+  --badge-teal: #14b8a6;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -78,6 +79,78 @@ a:hover { text-decoration: underline; }
 
 .mono { font-family: inherit; letter-spacing: -0.02em; }
 
+/* ── Sortable column headers ─────────────────────────────────────── */
+
+.call-list-table th.sortable-header {
+  cursor: pointer;
+  user-select: none;
+  position: relative;
+  padding-right: 20px;
+  transition: color 0.15s ease;
+}
+
+.call-list-table th.sortable-header:hover {
+  color: var(--color-text);
+}
+
+.sort-indicator {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 10px;
+  opacity: 0.3;
+}
+
+.sort-active .sort-indicator {
+  opacity: 1;
+  color: var(--color-accent);
+}
+
+/* ── Date group headers ──────────────────────────────────────────── */
+
+.date-group-header td {
+  background: var(--color-surface);
+  font-weight: 600;
+  font-size: 13px;
+  padding: 10px 12px;
+  cursor: pointer;
+  user-select: none;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+
+.date-group-header:hover td {
+  background: #222533;
+}
+
+.date-group-header .collapse-icon {
+  display: inline-block;
+  width: 16px;
+  margin-right: 8px;
+  font-size: 10px;
+  transition: transform 0.15s ease;
+}
+
+.date-group-header .date-group-count {
+  margin-left: 10px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--color-text-muted);
+}
+
+/* ── Call row: combined Time + Call ID cell ───────────────────────── */
+
+.call-time {
+  display: block;
+}
+
+.call-id {
+  display: block;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
 /* ── Timeline ────────────────────────────────────────────────────── */
 
 .timeline { margin-top: 16px; padding-bottom: 48px; }
@@ -122,6 +195,7 @@ a:hover { text-decoration: underline; }
 .badge-red { background: var(--badge-red); }
 .badge-darkgray { background: var(--badge-darkgray); }
 .badge-yellow { background: var(--badge-yellow); color: #1a1d27; }
+.badge-teal { background: var(--badge-teal); color: #fff; }
 
 /* ── Event Content ───────────────────────────────────────────────── */
 
@@ -133,6 +207,18 @@ a:hover { text-decoration: underline; }
 .event-content .meta { color: var(--color-text-muted); font-size: 12px; }
 .event-content em { font-style: italic; color: var(--color-text-muted); }
 .event-content strong { font-weight: 600; }
+.event-content .result-preview {
+  display: block;
+  margin-top: 4px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 600px;
+}
 
 .inline-status {
   display: inline-block;

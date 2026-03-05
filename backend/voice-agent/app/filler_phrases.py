@@ -29,47 +29,61 @@ class FillerPhraseManager:
     max_history: int = 5
 
     # Tool category to specific phrases mapping
-    CATEGORY_PHRASES: Dict[ToolCategory, List[str]] = field(default_factory=lambda: {
-        ToolCategory.CUSTOMER_INFO: [
-            "Let me pull up your account information...",
-            "I'm looking up your account now...",
-            "Just a moment while I access your account...",
-        ],
-        ToolCategory.ORDER_MANAGEMENT: [
-            "I'm checking on that order for you now...",
-            "Let me look up your order status...",
-            "One moment while I find your order...",
-        ],
-        ToolCategory.CRM: [
-            "I'm creating that for you now...",
-            "Let me set that up for you...",
-            "Just a moment while I process that...",
-        ],
-        ToolCategory.KNOWLEDGE_BASE: [
-            "Let me search our knowledge base...",
-            "I'm looking that up for you...",
-            "One moment while I find that information...",
-        ],
-        ToolCategory.SYSTEM: [
-            "One moment while I look that up...",
-            "Let me check on that for you...",
-            "Just a second...",
-        ],
-        ToolCategory.TESTING: [
-            "Processing your request...",
-            "One moment please...",
-        ],
-    })
+    CATEGORY_PHRASES: Dict[ToolCategory, List[str]] = field(
+        default_factory=lambda: {
+            ToolCategory.CUSTOMER_INFO: [
+                "Let me pull up your account information...",
+                "I'm looking up your account now...",
+                "Just a moment while I access your account...",
+            ],
+            ToolCategory.ORDER_MANAGEMENT: [
+                "I'm checking on that order for you now...",
+                "Let me look up your order status...",
+                "One moment while I find your order...",
+            ],
+            ToolCategory.CRM: [
+                "I'm creating that for you now...",
+                "Let me set that up for you...",
+                "Just a moment while I process that...",
+            ],
+            ToolCategory.CUSTOMER_SERVICE: [
+                "Let me check on that appointment for you...",
+                "I'm looking into scheduling options now...",
+                "One moment while I handle that for you...",
+            ],
+            ToolCategory.AUTHENTICATION: [
+                "Let me verify your identity...",
+                "I'm checking your credentials now...",
+                "One moment while I confirm your information...",
+            ],
+            ToolCategory.KNOWLEDGE_BASE: [
+                "Let me search our knowledge base...",
+                "I'm looking that up for you...",
+                "One moment while I find that information...",
+            ],
+            ToolCategory.SYSTEM: [
+                "One moment while I look that up...",
+                "Let me check on that for you...",
+                "Just a second...",
+            ],
+            ToolCategory.TESTING: [
+                "Processing your request...",
+                "One moment please...",
+            ],
+        }
+    )
 
     # Generic phrases used as fallback
-    GENERIC_PHRASES: List[str] = field(default_factory=lambda: [
-        "Just a moment...",
-        "Let me check on that...",
-        "One second while I look into this...",
-        "Bear with me for just a moment...",
-        "Let me look that up for you...",
-        "I'm working on that now...",
-    ])
+    GENERIC_PHRASES: List[str] = field(
+        default_factory=lambda: [
+            "Just a moment...",
+            "Let me check on that...",
+            "One second while I look into this...",
+            "Bear with me for just a moment...",
+            "Let me look that up for you...",
+            "I'm working on that now...",
+        ]
+    )
 
     def get_phrase(self, category: Optional[ToolCategory] = None) -> str:
         """Get a contextually appropriate filler phrase.
@@ -139,7 +153,7 @@ class FillerPhraseManager:
 
         # Trim history to max size
         if len(self.phrase_history) > self.max_history:
-            self.phrase_history = self.phrase_history[-self.max_history:]
+            self.phrase_history = self.phrase_history[-self.max_history :]
 
     def reset(self) -> None:
         """Reset phrase history.

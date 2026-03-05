@@ -82,39 +82,57 @@ def _handle_list_calls(params: dict[str, str]) -> dict[str, Any]:
 
     Merges session_ended + call_metrics_summary into one entry per call.
     Returns enriched objects with duration, turns, avg_response_ms, status.
+
+    Supports multi-day queries via `days_back` parameter (default 1, max 30).
+    If `date_from` is provided, it takes precedence as a single-day query.
     """
+    from datetime import datetime, timedelta, timezone
+
     date_from = params.get("date_from", "")
+    days_back = min(int(params.get("days_back", "1")), 30)
     disposition = params.get("disposition", "")
     limit = min(int(params.get("limit", "50")), 100)
     next_token = params.get("next_token")
 
-    if not date_from:
-        from datetime import datetime, timezone
+    # Build list of dates to query
+    if date_from:
+        # Explicit date_from: single-day query (backward compatible)
+        dates = [date_from]
+    else:
+        today = datetime.now(tz=timezone.utc).date()
+        dates = [(today - timedelta(days=i)).isoformat() for i in range(days_back)]
 
-        date_from = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
+    # Query each date partition and collect items
+    all_items: list[dict[str, Any]] = []
+    last_key = None
 
-    query_kwargs: dict[str, Any] = {
-        "IndexName": "GSI1",
-        "KeyConditionExpression": Key("GSI1PK").eq(f"DATE#{date_from}"),
-        "Limit": limit * 2,  # fetch extra to account for dedup
-        "ScanIndexForward": False,
-    }
+    for date_str in dates:
+        query_kwargs: dict[str, Any] = {
+            "IndexName": "GSI1",
+            "KeyConditionExpression": Key("GSI1PK").eq(f"DATE#{date_str}"),
+            "Limit": limit * 2,  # fetch extra to account for dedup
+            "ScanIndexForward": False,
+        }
 
-    if disposition:
-        query_kwargs["KeyConditionExpression"] &= Key("GSI1SK").begins_with(
-            f"DISP#{disposition}#"
-        )
+        if disposition:
+            query_kwargs["KeyConditionExpression"] &= Key("GSI1SK").begins_with(
+                f"DISP#{disposition}#"
+            )
 
-    if next_token:
-        query_kwargs["ExclusiveStartKey"] = json.loads(next_token)
+        # Only apply pagination token on the first date (for backward compat)
+        if next_token and date_str == dates[0]:
+            query_kwargs["ExclusiveStartKey"] = json.loads(next_token)
 
-    response = events_table.query(**query_kwargs)
-    items = response.get("Items", [])
-    last_key = response.get("LastEvaluatedKey")
+        response = events_table.query(**query_kwargs)
+        all_items.extend(response.get("Items", []))
+
+        # Track last evaluated key from the final date partition
+        if response.get("LastEvaluatedKey"):
+            last_key = response["LastEvaluatedKey"]
 
     # Deduplicate: merge session_ended + call_metrics_summary by call_id
     calls_map: dict[str, dict[str, Any]] = {}
-    for item in items:
+    for item in all_items:
         cid = item.get("call_id", "")
         if not cid:
             continue
@@ -144,7 +162,8 @@ def _handle_list_calls(params: dict[str, str]) -> dict[str, Any]:
     calls = list(calls_map.values())[:limit]
 
     result: dict[str, Any] = {"calls": calls, "count": len(calls)}
-    if last_key:
+    if last_key and len(dates) == 1:
+        # Only return pagination token for single-date queries
         result["next_token"] = json.dumps(last_key, cls=DecimalEncoder)
 
     return _json_response(200, result)

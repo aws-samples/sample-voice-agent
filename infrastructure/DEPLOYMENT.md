@@ -266,7 +266,7 @@ Call your phone number to test.
 
 ### Deploy Capability Agents (A2A)
 
-The Knowledge Base and CRM capability agents extend the voice agent with RAG and customer data. They are optional.
+The Knowledge Base, CRM, and Appointment capability agents extend the voice agent with RAG, customer data, and scheduling. They are optional.
 
 ```bash
 # Deploy Knowledge Base agent
@@ -276,6 +276,10 @@ The Knowledge Base and CRM capability agents extend the voice agent with RAG and
 # Deploy CRM agent
 ./deploy.sh deploy-stack VoiceAgentCRM
 ./deploy.sh deploy-stack VoiceAgentCrmAgent
+
+# Deploy Appointment agent
+./deploy.sh deploy-stack VoiceAgentAppointment
+./deploy.sh deploy-stack VoiceAgentAppointmentAgent
 ```
 
 Enable the capability registry so the voice agent discovers these agents:
@@ -313,6 +317,61 @@ Test by calling your phone number and saying: *"Look up the account for 555-0100
 > **Without seeding, all CRM lookups return "customer not found."**
 
 To reset and re-seed: `curl -s -X DELETE "$CRM_URL/admin/reset"` followed by `curl -s -X POST "$CRM_URL/admin/seed"`
+
+#### Seed Appointment Demo Data
+
+The Appointment DynamoDB tables are created empty. Seed them to enable appointment scheduling demos:
+
+```bash
+APPT_URL=$(aws ssm get-parameter --name "/voice-agent/appointments/api-url" --query 'Parameter.Value' --output text)
+curl -s -X POST "$APPT_URL/admin/seed" | python3 -m json.tool
+```
+
+This creates availability slots for 5 service types over the next 14 days:
+- On-site repair
+- Network setup
+- Hardware upgrade
+- General consultation
+- Preventive maintenance
+
+It also creates 6 sample appointments for the demo customers.
+
+To reset and re-seed: `curl -s -X DELETE "$APPT_URL/admin/reset"` followed by `curl -s -X POST "$APPT_URL/admin/seed"`
+
+### Enable Multi-Agent Flows
+
+Multi-agent Flows mode dynamically swaps LLM context mid-call based on discovered capability agents. Each agent becomes a specialist node with its own persona and scoped tools. See [Multi-Agent Flows Guide](../docs/guides/multi-agent-flows.md) for the full operator guide.
+
+**Prerequisites:** Capability agents must be deployed and the capability registry must be enabled (see above).
+
+Enable Flows mode:
+```bash
+aws ssm put-parameter \
+  --name "/voice-agent/config/enable-flow-agents" \
+  --value "true" \
+  --type String \
+  --overwrite
+```
+
+The next incoming call will use the multi-agent flow graph. No container restart needed.
+
+To adjust the loop protection threshold (default: 10 transitions per call):
+```bash
+aws ssm put-parameter \
+  --name "/voice-agent/config/flow-max-transitions" \
+  --value "15" \
+  --type String \
+  --overwrite
+```
+
+To disable Flows and revert to single-agent mode:
+```bash
+aws ssm put-parameter \
+  --name "/voice-agent/config/enable-flow-agents" \
+  --value "false" \
+  --type String \
+  --overwrite
+```
 
 ### Enable Call Transfers
 

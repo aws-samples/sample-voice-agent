@@ -30,6 +30,7 @@ class ToolCategory(Enum):
     ORDER_MANAGEMENT = "order_management"
     CRM = "crm"
     CUSTOMER_SERVICE = "customer_service"
+    APPOINTMENT = "appointment"
     AUTHENTICATION = "authentication"
     KNOWLEDGE_BASE = "knowledge_base"
     SYSTEM = "system"

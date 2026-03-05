@@ -17,8 +17,11 @@ function formatEventLabel(event: CallEvent): string {
       return 'Call Started';
     case 'session_ended':
       return 'Call Ended';
-    case 'conversation_turn':
-      return event.data?.speaker === 'user' ? 'Caller' : 'Agent';
+    case 'conversation_turn': {
+      const speaker = event.data?.speaker === 'user' ? 'Caller' : 'Agent';
+      const agentNode = event.data?.agent_node ? ` [${String(event.data.agent_node)}]` : '';
+      return event.data?.speaker === 'user' ? speaker : `${speaker}${agentNode}`;
+    }
     case 'turn_completed':
       return `Turn ${event.turn_number ?? '?'} Metrics`;
     case 'tool_execution':
@@ -41,6 +44,16 @@ function formatEventLabel(event: CallEvent): string {
       return `${_friendlySkillName(String(event.data?.skill_id ?? 'unknown'))} (timeout)`;
     case 'a2a_tool_call_error':
       return `${_friendlySkillName(String(event.data?.skill_id ?? 'unknown'))} (error)`;
+    case 'agent_transition':
+      return `Transition: ${String(event.data?.from_node ?? '?')} \u2192 ${String(event.data?.to_node ?? '?')}`;
+    case 'flow_a2a_call_start':
+      return `${_friendlySkillName(String(event.data?.skill_id ?? 'unknown'))} (started)`;
+    case 'flow_a2a_call_success':
+      return `${_friendlySkillName(String(event.data?.skill_id ?? 'unknown'))} (success)`;
+    case 'flow_a2a_call_error':
+      return `${_friendlySkillName(String(event.data?.skill_id ?? 'unknown'))} (error)`;
+    case 'flow_a2a_call_timeout':
+      return `${_friendlySkillName(String(event.data?.skill_id ?? 'unknown'))} (timeout)`;
     default:
       return event.event_type.replace(/_/g, ' ');
   }
@@ -68,6 +81,7 @@ function renderEventContent(event: CallEvent): JSX.Element | string {
           <span className={`inline-status status-${d.status}`}>{String(d.status ?? '?')}</span>
           {' in '}{formatMs(d.execution_time_ms as number)}
           {d.category ? <span className="meta"> [{String(d.category)}]</span> : ''}
+          {d.result_summary ? <span className="result-preview"> {String(d.result_summary).slice(0, 120)}{String(d.result_summary).length > 120 ? '...' : ''}</span> : ''}
         </span>
       );
 
@@ -108,6 +122,7 @@ function renderEventContent(event: CallEvent): JSX.Element | string {
         <span>
           Completed in {formatMs(d.elapsed_ms as number)}
           {d.response_length != null && <span className="meta"> | {String(d.response_length)} chars returned</span>}
+          {d.result_summary ? <span className="result-preview"> {String(d.result_summary).slice(0, 120)}{String(d.result_summary).length > 120 ? '...' : ''}</span> : ''}
         </span>
       );
 
@@ -119,6 +134,36 @@ function renderEventContent(event: CallEvent): JSX.Element | string {
 
     case 'a2a_tool_call_error':
       return `Error: ${String(d.error ?? 'unknown')}`;
+
+    case 'agent_transition':
+      return (
+        <span>
+          {d.reason ? <em>&ldquo;{String(d.reason)}&rdquo;</em> : ''}
+          {d.transition_latency_ms != null && <span className="meta"> | transition {formatMs(d.transition_latency_ms as number)}</span>}
+          {d.summary_latency_ms != null && <span className="meta"> | summary {formatMs(d.summary_latency_ms as number)}</span>}
+          {d.loop_protection === true && <span className="inline-status status-error">loop protection</span>}
+        </span>
+      );
+
+    case 'flow_a2a_call_start':
+      return d.query
+        ? <span>Query: <em>&ldquo;{String(d.query)}&rdquo;</em></span>
+        : '';
+
+    case 'flow_a2a_call_success':
+      return (
+        <span>
+          Completed in {formatMs(d.elapsed_ms as number)}
+          {d.response_length != null && <span className="meta"> | {String(d.response_length)} chars returned</span>}
+          {d.result_summary ? <span className="result-preview"> {String(d.result_summary).slice(0, 120)}{String(d.result_summary).length > 120 ? '...' : ''}</span> : ''}
+        </span>
+      );
+
+    case 'flow_a2a_call_error':
+      return `Error: ${String(d.error ?? 'unknown')}`;
+
+    case 'flow_a2a_call_timeout':
+      return `Timed out after ${formatMs(d.elapsed_ms as number)}`;
 
     case 'session_started':
       return '';

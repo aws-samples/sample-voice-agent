@@ -172,15 +172,17 @@ Capability Agents:
   [status] Registry: enabled / disabled
   [status] KB Agent: deployed / not deployed
   [status] CRM Agent: deployed / not deployed
+  [status] Appointment Agent: deployed / not deployed
 ```
 
 To check whether agent stacks are deployed, look for their SSM parameters or CloudFormation stacks:
 ```bash
 aws cloudformation describe-stacks --stack-name VoiceAgentKbAgent --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "not-deployed"
 aws cloudformation describe-stacks --stack-name VoiceAgentCrmAgent --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "not-deployed"
+aws cloudformation describe-stacks --stack-name VoiceAgentAppointmentAgent --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "not-deployed"
 ```
 
 If agents are not deployed, mention:
-> "The Knowledge Base and CRM capability agents are optional. Use `/deploy-capability-agents` to add RAG search or customer lookup to your voice agent."
+> "The Knowledge Base, CRM, and Appointment capability agents are optional. Use `/deploy-capability-agents` to add RAG search, customer lookup, or appointment scheduling to your voice agent."
 
 "You can run this check anytime by asking me to verify the deployment."

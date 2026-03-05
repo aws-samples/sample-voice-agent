@@ -13,6 +13,8 @@ import {
   CrmStack,
   KbAgentStack,
   CrmAgentStack,
+  AppointmentStack,
+  AppointmentAgentStack,
   CallFlowVisualizerStack,
 } from './stacks';
 
@@ -202,6 +204,34 @@ const crmAgentStack = new CrmAgentStack(app, 'VoiceAgentCrmAgent', {
 });
 crmAgentStack.addDependency(ecsStack);
 crmAgentStack.addDependency(crmStack);
+
+// Phase 12: Appointment Stack (standalone - can be deployed independently)
+// Provides appointment scheduling for the voice agent
+const appointmentStack = new AppointmentStack(app, 'VoiceAgentAppointment', {
+  env,
+  config,
+  description: 'Voice Agent POC - Appointment Scheduling (DynamoDB + API Gateway)',
+  tags: {
+    Project: config.projectName,
+    Environment: config.environment,
+    Phase: '12',
+  },
+});
+
+// Phase 13: Appointment Agent Stack (capability agent - depends on ECS + Appointment)
+// Appointment scheduling as an independent A2A capability agent
+const appointmentAgentStack = new AppointmentAgentStack(app, 'VoiceAgentAppointmentAgent', {
+  env,
+  config,
+  description: 'Voice Agent POC - Appointment Scheduling A2A Capability Agent',
+  tags: {
+    Project: config.projectName,
+    Environment: config.environment,
+    Phase: '13',
+  },
+});
+appointmentAgentStack.addDependency(ecsStack);
+appointmentAgentStack.addDependency(appointmentStack);
 
 // Phase 11: Call Flow Visualizer (optional - bolt-on add-on)
 // Enable with: -c voice-agent:enableCallFlowVisualizer=true
