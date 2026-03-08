@@ -36,6 +36,14 @@ This Guidance provides a sample foundation for building real-time voice AI agent
 
 ### Architecture
 
+![Architecture overview](docs/diagrams/diagram-guidance-for-voice-agents-on-aws.png)
+
+> **Note:** While Pipecat supports speech-to-speech models, this Guidance does not yet support them.  Support speech-to-speech models is in our roadmap.
+
+
+<details>
+  <summary>Detailed diagram</summary>
+
 ```mermaid
 graph TB
     Caller["Caller (Phone)"]
@@ -87,6 +95,7 @@ The architecture flow:
 4. The Pipecat pipeline processes audio in real-time: Transport receives audio, VAD detects speech, STT converts to text, the LLM (Amazon Bedrock) generates a response with optional tool calls, and TTS converts the response back to audio.
 5. STT and TTS can run on Amazon SageMaker endpoints (audio stays in Amazon VPC) or via cloud APIs.
 6. When tool calling is enabled, the LLM can invoke local tools (e.g., time, transfer) or discover and call remote A2A capability agents (Knowledge Base, CRM) via AWS Cloud Map.
+</details>
 
 ### Cost
 
@@ -198,8 +207,8 @@ This project includes [Claude Code skills](https://docs.anthropic.com/en/docs/cl
 
 1. Clone the repository:
     ```bash
-    git clone https://github.com/aws-samples/sample-sip-voice-agent.git
-    cd sample-sip-voice-agent
+    git clone https://github.com/aws-samples/sample-voice-agent.git
+    cd sample-voice-agent
     ```
 
 2. Open the project in Claude Code (or your preferred AI-assisted IDE).
@@ -229,8 +238,8 @@ See the full [Deployment Guide](infrastructure/DEPLOYMENT.md) for step-by-step m
 
 1. Clone the repository:
     ```bash
-    git clone https://github.com/aws-samples/sample-sip-voice-agent.git
-    cd sample-sip-voice-agent
+    git clone https://github.com/aws-samples/sample-voice-agent.git
+    cd sample-voice-agent
     ```
 
 2. Navigate to the infrastructure directory and configure environment:
@@ -422,7 +431,7 @@ Cloud API mode requires Deepgram and Cartesia API keys. Amazon SageMaker mode re
 ### Project Structure
 
 ```
-sample-sip-voice-agent/
+sample-voice-agent/
 ├── infrastructure/           # CDK infrastructure code
 │   ├── src/
 │   │   ├── stacks/          # CloudFormation stacks
@@ -469,7 +478,7 @@ sample-sip-voice-agent/
 - Cold start for new Amazon ECS tasks takes ~90 seconds. Total time from overload to new capacity: ~3-5 minutes.
 - The A2A capability agent discovery relies on AWS Cloud Map polling (default: every 30 seconds).
 
-For any feedback, questions, or suggestions, please use the [issues tab](https://github.com/aws-samples/sample-sip-voice-agent/issues) under this repo.
+For any feedback, questions, or suggestions, please use the [issues tab](https://github.com/aws-samples/sample-voice-agent/issues) under this repo.
 
 ## Revisions
 
@@ -483,10 +492,10 @@ For any feedback, questions, or suggestions, please use the [issues tab](https:/
 
 ## Authors
 
-- [Court Schuett](https://github.com/cschuett)
+- [Court Schuett](https://github.com/schuettc)
 - [Daniel Wirjo](https://github.com/wirjo)
-- [Victor Wang](https://github.com/victorwang)
-- [Evan Grenda](https://github.com/egrenda)
+- [Victor Wang](https://www.linkedin.com/in/vwang1111/)
+- [Evan Grenda](https://www.linkedin.com/in/evan-grenda/)
 
 ## Security
 
