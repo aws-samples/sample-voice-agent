@@ -31,6 +31,7 @@ class KnowledgeBaseConfig:
 class ProviderConfig:
     """Provider configuration for STT/TTS."""
 
+    pipeline_mode: str = "cascaded"  # "cascaded" or "speech-to-speech"
     stt_provider: str = "deepgram"
     tts_provider: str = "cartesia"
     voice_id: str = "79a125e8-cd45-4c13-8a67-188112f4dd22"
@@ -256,6 +257,7 @@ class ConfigService:
             f"{self.CONFIG_PATH}/kb-min-confidence",
             # App Config
             f"{self.CONFIG_PATH}/log-level",
+            f"{self.CONFIG_PATH}/pipeline-mode",
             f"{self.CONFIG_PATH}/stt-provider",
             f"{self.CONFIG_PATH}/tts-provider",
             f"{self.CONFIG_PATH}/voice-id",
@@ -292,6 +294,7 @@ class ConfigService:
 
         # Provider config
         provider_config = ProviderConfig(
+            pipeline_mode=params.get(f"{self.CONFIG_PATH}/pipeline-mode", "cascaded"),
             stt_provider=params.get(f"{self.CONFIG_PATH}/stt-provider", "deepgram"),
             tts_provider=params.get(f"{self.CONFIG_PATH}/tts-provider", "cartesia"),
             voice_id=params.get(
