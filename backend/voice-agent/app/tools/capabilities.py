@@ -33,7 +33,7 @@ from typing import Any, Dict, FrozenSet, Optional, TYPE_CHECKING
 import structlog
 
 if TYPE_CHECKING:
-    from pipecat.transports.daily.transport import DailyTransport
+    from pipecat.transports.base_transport import BaseTransport
 
 logger = structlog.get_logger(__name__)
 
@@ -53,7 +53,7 @@ class PipelineCapability(Enum):
         should declare requires=frozenset({PipelineCapability.BASIC}).
 
     Transport capabilities:
-        Require a live DailyTransport instance in the pipeline.
+        Require a live transport instance (DailyTransport or SmallWebRTCTransport).
         - TRANSPORT: The transport object exists and is connected.
         - SIP_SESSION: A SIP dial-in connection is present (the pipeline is
           handling a PSTN call, not a WebRTC-only session).
@@ -82,7 +82,7 @@ class PipelineCapability(Enum):
 
 
 def detect_capabilities(
-    transport: Optional["DailyTransport"] = None,
+    transport: Optional["BaseTransport"] = None,
     sip_session_tracker: Optional[Dict[str, Optional[str]]] = None,
     config: Optional[Any] = None,
 ) -> FrozenSet[PipelineCapability]:
@@ -94,7 +94,8 @@ def detect_capabilities(
     each tool's `requires` set to decide which tools to register.
 
     Args:
-        transport: The DailyTransport instance, or None if not available.
+        transport: The transport instance (DailyTransport, SmallWebRTCTransport,
+            etc.), or None if not available.
         sip_session_tracker: Mutable dict tracking the SIP session ID.
             Presence (not None) indicates this is a SIP-capable pipeline.
         config: AppConfig from ConfigService (currently unused but reserved

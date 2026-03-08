@@ -31,6 +31,7 @@ This Guidance provides a sample foundation for building real-time voice AI agent
 - **Flexible orchestration** -- Uses [Pipecat](https://github.com/pipecat-ai/pipecat), an open-source framework for voice AI pipelines
 - **Plug-in models** -- Supports automatic speech recognition (ASR) or speech-to-text (STT), text-to-speech (TTS), and large language model (LLM) providers
 - **Phone and web** -- Accepts phone calls via [Daily](https://www.daily.co/) SIP and public switched telephone network (PSTN) dial-in, and web applications through Daily managed WebRTC
+- **Local prototyping** -- Test the full voice pipeline from your browser via WebRTC without any Daily.co account, phone number, or SIP infrastructure
 - **Extensible agents** -- Extends capabilities through an agent-to-agent (A2A) hub-and-spoke architecture with AWS Cloud Map discovery
 - **AWS infrastructure** -- Runs on Amazon ECS Fargate with auto-scaling, Amazon Bedrock for LLM, and optional self-hosted STT/TTS on Amazon SageMaker
 
@@ -300,6 +301,31 @@ After deployment, validate that all resources are running correctly:
 
 Once deployed, call your PSTN phone number to interact with the voice agent.
 
+### Local Prototyping (Browser-Based)
+
+Test the full voice pipeline from your browser without any Daily.co account, phone number, or SIP infrastructure. Uses Pipecat's `SmallWebRTCTransport` with a prebuilt WebRTC browser UI.
+
+**Prerequisites:** Cloud resources must be deployed first (Amazon Bedrock access, Deepgram/Cartesia API keys). Only the transport layer is local -- STT, LLM, and TTS still use cloud services.
+
+```bash
+cd backend/voice-agent
+pip install -r requirements.txt
+cp .env.example .env
+# Edit .env: set DEEPGRAM_API_KEY, CARTESIA_API_KEY, AWS_REGION
+
+python -m app.local_main
+# Open http://localhost:7860 in your browser and click Connect
+```
+
+Speak into your microphone and hear the agent respond through your speakers. Tool calling, filler phrases, and all pipeline features work identically to production. SIP-only tools (e.g., `transfer_to_agent`) are automatically excluded.
+
+| Environment Variable | Default | Description |
+| -------------------- | ------- | ----------- |
+| `LOCAL_PORT` | `7860` | Port for the local server |
+| `SYSTEM_PROMPT` | Generic assistant | Custom system prompt |
+| `ENABLE_TOOL_CALLING` | `false` | Enable LLM tool calling |
+| `ENABLE_FILLER_PHRASES` | `true` | Enable filler phrases during tool delays |
+
 ### Basic Conversation
 
 The agent handles natural dialogue out of the box. Simply call and speak naturally.
@@ -445,7 +471,9 @@ sample-voice-agent/
 │   │   │   ├── services/    # STT/TTS/LLM service factories
 │   │   │   ├── tools/       # Tool framework + built-in tools
 │   │   │   ├── a2a/         # A2A capability agent integration
-│   │   │   ├── pipeline_ecs.py   # Pipecat pipeline configuration
+│   │   │   ├── pipeline_ecs.py   # Pipecat pipeline configuration (Daily transport)
+│   │   │   ├── pipeline_local.py # Pipecat pipeline configuration (SmallWebRTC transport)
+│   │   │   ├── local_main.py     # Local prototyping entry point (FastAPI + browser WebRTC)
 │   │   │   ├── observability.py  # Metrics observers
 │   │   │   └── service_main.py   # HTTP service (aiohttp)
 │   │   ├── tests/           # Python tests

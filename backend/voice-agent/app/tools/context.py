@@ -10,7 +10,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from ..observability import MetricsCollector
     from pipecat.frames.frames import Frame
-    from pipecat.transports.daily.transport import DailyTransport
+    from pipecat.transports.base_transport import BaseTransport
 
 #: Callback type for queuing frames into the pipeline.
 #: Signature: async (Frame) -> None
@@ -33,7 +33,7 @@ class ToolContext:
         user_phone: Optional user phone number (from caller ID)
         conversation_history: Recent conversation turns for context
         metrics_collector: Optional metrics collector for observability
-        transport: Optional DailyTransport for SIP operations (e.g., transfers)
+        transport: Optional transport for SIP operations (e.g., transfers)
         queue_frame: Optional callback to queue a frame into the pipeline
             (e.g., EndFrame to end a call). Wired to PipelineTask.queue_frame
             at pipeline creation time.
@@ -68,7 +68,7 @@ class ToolContext:
     metrics_collector: Optional["MetricsCollector"] = None
 
     # Transport for SIP operations (e.g., call transfers)
-    transport: Optional["DailyTransport"] = None
+    transport: Optional["BaseTransport"] = None
 
     # SIP/Dial-in session ID for transfer operations
     # This is the participant session ID needed for SIP REFER
